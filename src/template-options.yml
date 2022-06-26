@@ -1,0 +1,5 @@
+mutators:
+  - class: MQTTClientTest
+    en:
+      name: MQTT Client Test
+      description: Connects to an MQTT server
