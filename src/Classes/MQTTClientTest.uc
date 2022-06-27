@@ -9,13 +9,12 @@ function PostBeginPlay() {
 }
 
 function ByteBufferTest() {
-	local ByteBuffer buf;
+	local ByteBuffer buf, other;
 	local byte b[255];
 	local int i;
 
 	buf = new class'ByteBuffer';
 	buf.clear();
-
 
 	assert(buf.hasRemaining());
 	assert(buf.remaining() == 1024);
@@ -65,6 +64,22 @@ function ByteBufferTest() {
 	assert(b[0] == 200);
 	assert(b[9] == 209);
 	assert(buf.getBytes(b, 50) == 0);
+
+	other = new class'ByteBuffer';
+	other.clear();
+	buf.clear();
+	for (i = 0; i < 10; i++) b[i] = i + 100;
+	assert(buf.putBytes(b, 0, 10) == 10);
+	buf.flip();
+	assert(buf.remaining() == 10);
+	assert(other.putBuffer(buf) == 10);
+	assert(buf.remaining() == 0);
+	assert(other.remaining() == 1014);
+	other.flip();
+	assert(other.remaining() == 10);
+	assert(other.get() == 100);
+	assert(other.get() == 101);
+	assert(other.remaining() == 8);
 }
 
 defaultproperties {

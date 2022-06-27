@@ -23,9 +23,9 @@ function clear() {
  * the beginning. The marker is also reset.
  *
  * This us useful after a series of write operations, where data has
- * been written, flipping the buffer then sets the limit tot he data
+ * been written, flipping the buffer then sets the limit to the data
  * size, and puts the position at the beginning, allowing subsequent
- * read operations on the data.
+ * read operations on the written data.
  */
 function flip() {
 	limit = position;
@@ -101,6 +101,30 @@ function bool setPosition(int newPosition) {
 		return true;
 	}
 	return false;
+}
+
+/**
+ * Append the remaining content of the provided source buffer to
+ * this one, returning the number of bytes added.
+ *
+ * If there are more remaining bytes in the source buffer than
+ * this one, the operation fails, returning -1.
+ */
+function int putBuffer(ByteBuffer src) {
+	local int was, c;
+	local byte b[255];
+
+	if (src.remaining() > remaining()) {
+  	warn("Cannot add more than remaining capacity " $ remaining() $ ", requested " $ src.remaining());
+  	return -1;
+	}
+
+	do {
+		c = src.getBytes(b, 255);
+		putBytes(b, 0, c);
+	} until (c == 0)
+
+	return position - was;
 }
 
 /**
