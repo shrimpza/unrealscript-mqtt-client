@@ -3,16 +3,29 @@ class MQTTClient extends TCPLink;
 // connection properties
 var String mqttHost;
 var int mqttPort;
+var String clientIdent;
 
 // state
 var private int packetIdent;
+
+var private ByteBuffer out;
+var private ByteBuffer in;
 
 static final operator(18) int % (int A, int B) {
   return A - (A / B) * B;
 }
 
+function PreBeginPlay() {
+	Super.PreBeginPlay();
+
+	out = new class'ByteBuffer';
+	in = new class'ByteBuffer';
+}
+
 function PostBeginPlay() {
 	local IpAddr ip;
+
+	Super.PostBeginPlay();
 
 	packetIdent = 0;
 
@@ -41,31 +54,49 @@ function PostBeginPlay() {
 	}
 }
 
+function connectAck() {
+	warn("Received connection ack when not in connecting state!");
+}
+
+function subscribe(String topic) {
+	warn("Cannot subscribe, not connected.");
+}
+
+function subscribeAck() {
+	warn("Received subscription ack when not in connected state!");
+}
+
+function publish(String topic, String message) {
+	warn("Cannot publish, not connected.");
+}
+
+function publishAck() {
+	warn("Received publish ack when not in connected state!");
+}
+
+function published() {
+	warn("Received published when not in connected state!");
+}
+
 event Opened() {
-	local byte B[255];
-	local int encLen, i, cur;
+	local int was;
 
 	log("Connection opened!");
 
-	// send CONNECT
-	cur = 0;
-	B[cur++] = 0 | (1 << 4); // connect message identifier
-	B[cur++] = 0; // length will be set
-	setProtoHeader(B, cur);
-	setConnectFlags(false, false, false, false, false, true, B, cur);
-	writeShort(60, B, cur); // timeout
-	writeVarInt(5, B, cur); // size of properties FIXME size
+	in.clear();
+	out.clear();
 
-	B[cur++] = 39; // max packet size property
-	writeInt(255, B, cur); // max packet to 255
-  writeString("helloworld", B, cur);
-
-  // set the length at byte 2... FIXME
-  i = 1;
-  writeVarInt(cur - 2, B, i);
-
-	SendBinary(cur, B);
 	GotoState('Connecting');
+}
+
+function sendBuffer(ByteBuffer send) {
+	local byte b[255];
+	local int len;
+
+	while (send.hasRemaining()) {
+		len = send.getBytes(b, 255);
+		SendBinary(len, b);
+	}
 }
 
 function writeShort(int val, out byte dst[255], out int pos) {
@@ -84,22 +115,25 @@ function writeInt(int val, out byte dst[255], out int pos) {
 	dst[pos++] =  val & 0x000000ff;
 }
 
-function setProtoHeader(out byte dst[255], out int pos) {
-	writeString("MQTT", dst, pos);
-	dst[pos++] = 5; // mqtt version 5.0
-}
+//function setProtoHeader(out byte dst[255], out int pos) {
+//	writeString("MQTT", dst, pos);
+//	dst[pos++] = 5; // mqtt version 5.0
+//}
 
-function setConnectFlags(bool hasUserName, bool hasPassword, bool willRetain, bool wilQos, bool willFlag, bool cleanStart, out byte dst[255], out int pos) {
-	if (hasUserName) 	dst[pos] = dst[pos] | (1 << 7);
-	if (hasPassword) 	dst[pos] = dst[pos] | (1 << 6);
-	if (willRetain) 	dst[pos] = dst[pos] | (1 << 5);
-	if (wilQos) 			dst[pos] = dst[pos] | (1 << 4);
-	if (wilQos) 			dst[pos] = dst[pos] | (1 << 3);
-	if (willFlag) 		dst[pos] = dst[pos] | (1 << 2);
-	if (cleanStart) 	dst[pos] = dst[pos] | (1 << 1);
+function byte connectFlags(bool hasUserName, bool hasPassword, bool willRetain, bool wilQos, bool willFlag, bool cleanStart) {
+	local byte b;
+
+	b = 0;
+	if (hasUserName) 	b = b | (1 << 7);
+	if (hasPassword) 	b = b | (1 << 6);
+	if (willRetain) 	b = b | (1 << 5);
+	if (wilQos) 			b = b | (1 << 4);
+	if (wilQos) 			b = b | (1 << 3);
+	if (willFlag) 		b = b | (1 << 2);
+	if (cleanStart) 	b = b | (1 << 1);
 	// final bit reserved
 
-	pos++;
+	return b;
 }
 
 function arrayCopy(byte src[255], int len, out byte dst[255], int pos) {
@@ -137,9 +171,9 @@ event Closed() {
 	log("Connection closed!");
 }
 
-event Timer() {
-	// nothing, implemented within states
-}
+//event Timer() {
+//	// nothing, implemented within states
+//}
 
 function writeVarInt(int value, out byte dst[255], out int pos) {
   local byte encodedByte, rem, len;
@@ -207,6 +241,32 @@ state Connecting {
 
 	function BeginState() {
 		log("In Connecting state");
+
+		// send CONNECT
+		out.put((1 << 4)); // connect message identifier
+		out.mark(); // remember position, we need to return here to set the length
+		out.put(0); // the length will go here after we construct the body
+		out.putString("MQTT"); // protocol header
+		out.put(5); // protocol version, 5.0
+		out.put(connectFlags(false, false, false, false, false, true)); // connect flags
+		out.putShort(60); // keep-alive interval seconds
+
+		// properties - FIXME could be an additional buffer, but just pre-calculating the size now since this is simplistic
+		out.putVarInt(5);
+		// max packet size property
+		out.put(39);
+		out.putInt(512); // max packet to 512
+
+		out.putString(clientIdent); // client identifier
+
+		// prepare message to send
+		was = out.getPosition();
+		out.reset(); // return to mark
+		out.putVarInt(was - out.getPosition() - 1);
+		out.setPosition(was);
+		out.flip();
+
+		sendBuffer(out);
 	}
 
 	event Timer() {
@@ -391,10 +451,8 @@ state Connected {
 		// send CONNECT
 		cur = 0;
 		//
-		B[cur] = 0 | (1 << 7); // connect message identifier
-		B[cur] = B[cur] | (1 << 1); // connect message identifier
+		B[cur] = (1 << 7) | (1 << 1); // subscribe message identifier
 		cur++;
-//		B[cur++] = 0x82; // subscribe message identifier
 		B[cur++] = 0; // length will be set
 		// subscription header
 		//
@@ -418,6 +476,7 @@ Begin:
 }
 
 defaultproperties {
+	clientIdent="utserver"
   mqttHost="192.168.2.128"
   mqttPort=1883
 }

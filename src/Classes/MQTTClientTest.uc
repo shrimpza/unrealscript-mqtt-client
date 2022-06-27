@@ -80,6 +80,13 @@ function ByteBufferTest() {
 	assert(other.get() == 100);
 	assert(other.get() == 101);
 	assert(other.remaining() == 8);
+
+	buf.clear();
+	buf.putShort(223);
+	buf.putInt(9001);
+	buf.flip();
+	assert(buf.getShort() == 223);
+	assert(buf.getInt() == 9001);
 }
 
 defaultproperties {

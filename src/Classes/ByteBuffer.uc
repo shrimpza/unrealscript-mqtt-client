@@ -207,23 +207,26 @@ function int putShort(int val) {
 	if (!canWrite(2)) return -1;
 	was = position;
 
-	buf[position++] = ((val >> 8) & 0xff);
-	buf[position++] = val & 0xff;
+	buf[position++] = (val >> 8);
+	buf[position++] =  val;
 
 	return position - was;
 }
 
-// TODO readInt
+function int getInt() {
+	if (!canRead(4)) return -1;
+	return (buf[position++] << 24) | (buf[position++] << 16) | (buf[position++] << 8) | (buf[position++]);
+}
 
 function int putInt(int val) {
 	local int was;
 	if (!canWrite(4)) return -1;
 	was = position;
 
-	buf[position++] = (val & 0xff000000) >> 24;
-	buf[position++] = (val & 0x00ff0000) >> 16;
-	buf[position++] = (val & 0x0000ff00) >> 8;
-	buf[position++] =  val & 0x000000ff;
+	buf[position++] = (val >> 24);
+	buf[position++] = (val >> 16);
+	buf[position++] = (val >> 8);
+	buf[position++] =  val;
 
 	return position - was;
 }
