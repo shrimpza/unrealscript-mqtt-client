@@ -104,6 +104,29 @@ function bool setPosition(int newPosition) {
 }
 
 /**
+ * Copy bytes from the current buffer position, up to the count
+ * requested. If count is greater than the remaining buffer size,
+ * as much as remains in the buffer will be copied.
+ *
+ * Returns the number of bytes copied.
+ */
+function int getBytes(out byte data[255], int count) {
+  local int was, i;
+  was = position;
+
+  if (count > 255) {
+  	warn("Cannot copy more than 255 bytes, requested " $ count);
+  	return -1;
+  }
+
+  for (i = 0; i < count && position < limit; i++) {
+  	data[i] = buf[position++];
+  }
+
+  return position - was;
+}
+
+/**
  * Write bytes to the buffer, at the current position, returning
  * the number of bytes written.
  *
