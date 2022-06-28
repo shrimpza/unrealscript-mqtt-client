@@ -54,7 +54,38 @@ function PostBeginPlay() {
 	}
 }
 
-function connectAck() {
+event Timer() {
+	local byte buf[255];
+	local byte next;
+	local int read;
+
+	log("IsConnected: " $ IsConnected());
+
+	if (IsDataPending()) {
+		in.compact();
+		do {
+			read = ReadBinary(Min(in.remaining(), 255), buf);
+			log("read = " $ read);
+			if (read > 0) in.putBytes(buf, 0, read);
+		} until (read == 0 || !in.hasRemaining())
+		in.flip();
+	}
+
+	if (in.hasRemaining()) {
+		next = in.get();
+		if (((1 << 5) & next) > 0) { // CONNACK message
+			connectAck(in);
+		} else if (((1 << 4) & next) > 0 && ((1 << 7) & next) > 0) { // SUBACK message
+			subscribeAck(in);
+		} else if (((1 << 4) & next) > 0 && ((1 << 5) & next) > 0) { // PUBLISH message
+			published(in);
+		} else if (((1 << 6) & next) > 0) { // PUBACK message
+			publishAck(in);
+		}
+	}
+}
+
+function connectAck(ByteBuffer buf) {
 	warn("Received connection ack when not in connecting state!");
 }
 
@@ -62,7 +93,7 @@ function subscribe(String topic) {
 	warn("Cannot subscribe, not connected.");
 }
 
-function subscribeAck() {
+function subscribeAck(ByteBuffer buf) {
 	warn("Received subscription ack when not in connected state!");
 }
 
@@ -70,17 +101,15 @@ function publish(String topic, String message) {
 	warn("Cannot publish, not connected.");
 }
 
-function publishAck() {
+function publishAck(ByteBuffer buf) {
 	warn("Received publish ack when not in connected state!");
 }
 
-function published() {
+function published(ByteBuffer buf) {
 	warn("Received published when not in connected state!");
 }
 
 event Opened() {
-	local int was;
-
 	log("Connection opened!");
 
 	in.clear();
@@ -99,27 +128,6 @@ function sendBuffer(ByteBuffer send) {
 	}
 }
 
-function writeShort(int val, out byte dst[255], out int pos) {
-	dst[pos++] = ((val >> 8) & 0xff);
-	dst[pos++] = val & 0xff;
-}
-
-function int readShort(byte src[255], out int pos) {
-  return src[pos++] << 8 | src[pos++];
-}
-
-function writeInt(int val, out byte dst[255], out int pos) {
-	dst[pos++] = (val & 0xff000000) >> 24;
-	dst[pos++] = (val & 0x00ff0000) >> 16;
-	dst[pos++] = (val & 0x0000ff00) >> 8;
-	dst[pos++] =  val & 0x000000ff;
-}
-
-//function setProtoHeader(out byte dst[255], out int pos) {
-//	writeString("MQTT", dst, pos);
-//	dst[pos++] = 5; // mqtt version 5.0
-//}
-
 function byte connectFlags(bool hasUserName, bool hasPassword, bool willRetain, bool wilQos, bool willFlag, bool cleanStart) {
 	local byte b;
 
@@ -136,130 +144,45 @@ function byte connectFlags(bool hasUserName, bool hasPassword, bool willRetain, 
 	return b;
 }
 
-function arrayCopy(byte src[255], int len, out byte dst[255], int pos) {
-	local int i;
-	for (i = 0; i < len; i++) {
-		dst[i + pos] = src[i];
-	}
-}
-
-function int writeString(String str, out byte dst[255], out int pos) {
-	local int i;
-
-	writeShort(Len(str), dst, pos);
-	for (i = 0; i < Len(str); i++) {
-		dst[pos++] = Asc(Mid(str, i, 1));
-	}
-
-	return i;
-}
-
-function String readString(byte src[255], out int pos) {
-	local int len, i;
-	local String str;
-
-	len = readShort(src, pos);
-
-	for (i = 0; i < len; i++) {
-		str = str $ Chr(src[pos++]);
-	}
-
-	return str;
-}
-
 event Closed() {
 	log("Connection closed!");
-}
-
-//event Timer() {
-//	// nothing, implemented within states
-//}
-
-function writeVarInt(int value, out byte dst[255], out int pos) {
-  local byte encodedByte, rem, len;
-
-	if (value > 268435455) {
-		warn("Cannot encode size larger than 268435455, got " $ value);
-		return;
-	}
-
-  rem = value;
-	do {
-		encodedByte = rem % 128;
-		rem = rem / 128;
-		if (rem > 0) encodedByte = encodedByte | 128;
-		dst[pos++] = encodedByte;
-	} until (!(rem > 0))
-}
-
-function int readVarInt(byte buf[255], out int pos) {
-  local int multiplier, value;
-  local byte encodedByte;
-
-  multiplier = 1;
-  value = 0;
-
-  do {
-		encodedByte = buf[pos++];
-		value += (encodedByte & 127) * multiplier;
-		if (multiplier > 128*128*128) {
-			warn("Malformed Variable Byte value at position " $ pos);
-			return -1;
-		}
-		multiplier *= 128;
- 	} until (!((encodedByte & 128) != 0))
-
- 	return value;
-}
-
-/**
- * Reads a variable length value directly off the incoming socket data.
- */
-function int readVarIntDirectly() {
-	local byte buf[255];
-  local int multiplier, value;
-  local byte encodedByte;
-
-  multiplier = 1;
-  value = 0;
-
-  do {
-  	ReadBinary(1, buf);
-		encodedByte = buf[0];
-		value += (encodedByte & 127) * multiplier;
-		if (multiplier > 128*128*128) {
-			warn("Malformed Variable Byte value");
-			return -1;
-		}
-		multiplier *= 128;
- 	} until (!((encodedByte & 128) != 0))
-
- 	return value;
 }
 
 state Connecting {
 
 	function BeginState() {
+		local int was;
+
 		log("In Connecting state");
 
-		// send CONNECT
+		out.compact();
+
+		//
+		// packet header
 		out.put((1 << 4)); // connect message identifier
 		out.mark(); // remember position, we need to return here to set the length
 		out.put(0); // the length will go here after we construct the body
+
+		//
+		// connect header
 		out.putString("MQTT"); // protocol header
 		out.put(5); // protocol version, 5.0
 		out.put(connectFlags(false, false, false, false, false, true)); // connect flags
 		out.putShort(60); // keep-alive interval seconds
 
+		//
 		// properties - FIXME could be an additional buffer, but just pre-calculating the size now since this is simplistic
 		out.putVarInt(5);
 		// max packet size property
 		out.put(39);
 		out.putInt(512); // max packet to 512
 
+		//
+		// payload
 		out.putString(clientIdent); // client identifier
 
-		// prepare message to send
+		//
+		// set length and send
 		was = out.getPosition();
 		out.reset(); // return to mark
 		out.putVarInt(was - out.getPosition() - 1);
@@ -269,112 +192,85 @@ state Connecting {
 		sendBuffer(out);
 	}
 
-	event Timer() {
-		local byte buf[255];
-  	local int read, i, b;
-  	local bool isConnectAck;
-
-  	log("IsConnected: " $ IsConnected());
-
-  	if (IsDataPending()) {
-  		read = ReadBinary(255, buf);
-  		log("read = " $ read);
-  		if (read > 0) {
-  			if (((1 << 5) & buf[0]) > 0) { // CONNACK message
-  				connectAck();
-  			} else {
-  				warn("Unknown message type received when expecting CONNACK");
-  			}
-  		}
-  	}
-	}
-
-	function connectAck() {
-		local int len, cur;
-		local byte buf[255];
+	function connectAck(ByteBuffer buf) {
+		local int len, propsLen;
 		local byte flags, reasonCode, prop;
 
-		len = readVarIntDirectly();
-		log("payload length: " $ len);
-		log("DataPending: " $ DataPending);
-		ReadBinary(len, buf);
-		cur = 0;
-		flags = buf[cur++];
-		reasonCode = buf[cur++];
-		log("reasonCode: " $ reasonCode);
-		len = readVarInt(buf, cur);
-		log("props len: " $ len);
-		len += cur;
-		while (cur < len) {
-		  prop = buf[cur++];
-		  log("reading property: " $ prop);
+		len = buf.getVarInt();
+		len += buf.getPosition();
+		flags = buf.get();;
+		reasonCode = buf.get();
+		propsLen = buf.getVarInt();
+		propsLen += buf.getPosition();
+		while (buf.getPosition() < propsLen) {
+		  prop = buf.get();
 			switch (prop) {
 				case 0x11: // session expiry interval
 				  // 4 byte int
-				  cur += 4;
+				  log("session expiry interval: " $ buf.getInt());
 				  break;
 				case 0x21: // receive maximum
 				  // 2 byte short
-				  log("receive maximum: " $ readShort(buf, cur));
+				  log("receive maximum: " $ buf.getShort());
 				  break;
 				case 0x24: // maximum qos
 				  // 1 byte
-				  cur ++;
+				  log("maximum qos: " $ buf.get());
 				  break;
 				case 0x25: // retain available
 				  // 1 byte
-				  cur ++;
+				  log("retain available: " $ buf.get());
 				  break;
 				case 0x27: // maximum packet size
 				  // 2 byte short
-				  cur += 2;
+				  log("maximum packet size: " $ buf.getShort());
 				  break;
 				case 0x18: // assigned client identifier
 				  // variable length string
-					log("client id: " $ readString(buf, cur));
+				  log("client id: " $ buf.getString());
 				  break;
 				case 0x22: // topic alias maximum
 				  // 2 byte short
-				  log("topic alias maximum: " $ readShort(buf, cur));
+				  log("topic alias maximum: " $ buf.getShort());
 				  break;
 				case 0x1f: // reason string
-					log("reason string: " $ readString(buf, cur));
+					log("reason string: " $ buf.getString());
 				  break;
 				case 0x26: // user properties, repeats
-					log("user property name : " $ readString(buf, cur));
-					log("user property value: " $ readString(buf, cur));
+					log("user property name : " $ buf.getString());
+					log("user property value: " $ buf.getString());
 				  break;
 				case 0x28: // wildcard subscription available
 				  // 1 byte
-				  cur ++;
+				  log("wildcard subscription available: " $ buf.get());
 				  break;
 				case 0x29: // subscription identifiers available
 				  // 1 byte
-				  cur ++;
+				  log("subscription identifiers available: " $ buf.get());
 				  break;
 				case 0x2a: // shared subscriptions available
 				  // 1 byte
-				  cur ++;
+				  log("shared subscriptions available: " $ buf.get());
 				  break;
 				case 0x13: // server keep alive
 				  // 2 byte short
-				  cur += 2;
+				  log("server keep alive: " $ buf.getShort());
 				  break;
 				case 0x1a: // response information
-				  log("response information: " $ readString(buf, cur));
+				  log("response information: " $ buf.getString());
 				  break;
 				case 0x1a: // server reference
-				  log("response information: " $ readString(buf, cur));
+				  log("response information: " $ buf.getString());
 				  break;
 				case 0x15: // authentication method
-				  log("auth method: " $ readString(buf, cur));
+				  log("auth method: " $ buf.getString());
 				  break;
 				case 0x16: // auth data
 				  // ... byte binary data... everything until end of properties?
-				  cur = len;
+				  buf.setPosition(propsLen);
 				  break;
 				default:
-					warn("received unknown property identifier: " $ buf[cur-1]);
+					warn("received unknown property identifier: " $ prop);
 					return;
 			}
 		}
@@ -385,89 +281,69 @@ state Connecting {
 
 state Connected {
 
-	event Timer() {
-		local byte buf[255];
-  	local int read, i, b;
-  	local bool isConnectAck;
-
-  	log("IsConnected: " $ IsConnected());
-
-  	if (IsDataPending()) {
-  		read = ReadBinary(1, buf);
-  		log("read = " $ read);
-  		if (read > 0) {
-  			if (((1 << 4) & buf[0]) > 0
-  					&& ((1 << 7) & buf[0]) > 0) { // SUBACK message
-//  			if (buf[0] == 0x90) { // SUBACK message
-  				subscribeAck();
-  			} else {
-  				warn("Unknown message type received when expecting SUBACK: " $ buf[0]);
-  			}
-  		}
-  	}
-	}
-
-	function subscribeAck() {
+	function subscribeAck(ByteBuffer buf) {
 		local byte reasonCode, prop;
-		local int len, propsLen, cur;
-		local byte buf[255];
+		local int len, propsLen, ident;
 
 		log("Subscribed!");
 
-		len = readVarIntDirectly();
-		ReadBinary(len, buf);
-		log("packet ident: " $ readShort(buf, cur));
-		propsLen = readVarInt(buf, cur);
-		log("props len: " $ propsLen);
-		propsLen += cur;
-		while (cur < propsLen) {
-			prop = buf[cur++];
-			log("reading property: " $ prop);
+		len = buf.getVarInt();
+		len += buf.getPosition();
+		ident = buf.getShort();
+		if (ident != packetIdent) warn("Received packet ident " $ ident $ " but was expecting " $ packetIdent);
+		propsLen = buf.getVarInt();
+		propsLen += buf.getPosition();
+		while (buf.getPosition() < propsLen) {
+			prop = buf.get();
 			switch (prop) {
 				case 0x26: // user properties, repeats
-					log("user property name : " $ readString(buf, cur));
-					log("user property value: " $ readString(buf, cur));
+					log("user property name : " $ buf.getString());
+					log("user property value: " $ buf.getString());
 					break;
 				default:
-					warn("received unknown property identifier: " $ buf[cur-1]);
+					warn("received unknown property identifier: " $ prop);
 					return;
 			}
 		}
 
-		log("cur: " $ cur $ " len: " $ len);
-
-		while (cur < len) {
-			reasonCode = buf[cur++];
+		while (buf.getPosition() < len) {
+			reasonCode = buf.get();
 			log("reason code: " $ reasonCode);
 		}
 	}
 
 	function subscribe(String topic) {
-		local byte B[255];
-		local int encLen, i, cur;
+		local int was;
 
 		log("Subscribing to topic " $ topic);
 
-		// send CONNECT
-		cur = 0;
+		out.compact();
+
 		//
-		B[cur] = (1 << 7) | (1 << 1); // subscribe message identifier
-		cur++;
-		B[cur++] = 0; // length will be set
+		// packet header
+		out.put((1 << 7) | (1 << 1)); // subscribe message identifier
+		out.mark(); // remember position, we need to return here to set the length
+		out.put(0); // the length will go here after we construct the body
+
+		//
 		// subscription header
+		out.putShort(++packetIdent); // packet identifier - ack should match this
+		out.put(0); // properties length - 0, none
+
 		//
-		writeShort(++packetIdent, B, cur); // packet identifier - ack should match this
-		B[cur++] = 0; // properties length - 0, none
-
 		// subscriptions
-		writeString("lol", B, cur); // subscription name
-		B[cur++] = 0; // subscription options - 0, none
+		out.putString(topic); // subscription name
+		out.put(0); // subscription options - 0, none
 
-		// set the length at byte 2... FIXME
-		i = 1;
-		writeVarInt(cur - 2, B, i);
+		//
+		// set length and send
+		was = out.getPosition();
+		out.reset(); // return to mark
+		out.putVarInt(was - out.getPosition() - 1);
+		out.setPosition(was);
+		out.flip();
 
-		SendBinary(cur, B);
+		sendBuffer(out);
 	}
 
 Begin:
