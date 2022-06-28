@@ -73,12 +73,12 @@ event Timer() {
 
 	if (in.hasRemaining()) {
 		next = in.get();
-		if (((1 << 5) & next) > 0) { // CONNACK message
-			connectAck(in);
+		if (((1 << 4) & next) > 0 && ((1 << 5) & next) > 0) { // PUBLISH message
+			published(in, next);
 		} else if (((1 << 4) & next) > 0 && ((1 << 7) & next) > 0) { // SUBACK message
 			subscribeAck(in);
-		} else if (((1 << 4) & next) > 0 && ((1 << 5) & next) > 0) { // PUBLISH message
-			published(in);
+		} else if (((1 << 5) & next) > 0) { // CONNACK message
+			connectAck(in);
 		} else if (((1 << 6) & next) > 0) { // PUBACK message
 			publishAck(in);
 		}
@@ -105,7 +105,7 @@ function publishAck(ByteBuffer buf) {
 	warn("Received publish ack when not in connected state!");
 }
 
-function published(ByteBuffer buf) {
+function published(ByteBuffer buf, byte header) {
 	warn("Received published when not in connected state!");
 }
 
@@ -345,6 +345,48 @@ state Connected {
 
 		sendBuffer(out);
 	}
+
+	function published(ByteBuffer buf, byte header) {
+		local byte reasonCode, prop, b;
+		local int len, propsLen, ident;
+		local String topic;
+
+		log("Got a message!");
+
+		len = buf.getVarInt();
+		len += buf.getPosition();
+
+		topic = buf.getString();
+
+		// FIXME if QoS in header, read ident
+//		ident = buf.getShort();
+//		if (ident != packetIdent) warn("Received packet ident " $ ident $ " but was expecting " $ packetIdent);
+
+		propsLen = buf.getVarInt();
+		propsLen += buf.getPosition();
+		while (buf.getPosition() < propsLen) {
+			prop = buf.get();
+			switch (prop) {
+				case 0x01: // format indicator
+					log("payload format : " $ buf.get());
+					break;
+				default:
+					warn("received unknown property identifier: " $ prop);
+					return;
+			}
+		}
+
+		while (buf.getPosition() < len) {
+			// this is the payload
+			b = buf.get();
+			log(Chr(b));
+//			reasonCode = buf.get();
+//			log("reason code: " $ reasonCode);
+		}
+
+		// TODO if QoS in header, send ACK/REC
+	}
+
 
 Begin:
 	log("In Connected state");
