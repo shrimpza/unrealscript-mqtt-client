@@ -33,6 +33,7 @@ function PostBeginPlay() {
   LinkMode = MODE_Binary;
   ReceiveMode = RMODE_Manual;
 
+	// FIXME call Resolve(mqttHost), continue processing in Resolved(Addr)
 	if (StringToIpAddr(mqttHost, ip)) {
 		ip.port = mqttPort;
 		log("Got IP for host " $ mqttHost $ " = " $ ip.Addr);
@@ -46,12 +47,34 @@ function PostBeginPlay() {
 		return;
 	}
 
+	// FIXME move to Resolved
 	if (Open(ip)) {
 		log("Connected!");
 		SetTimer(1, True);
 	} else {
 		warn("Connection failed!");
 	}
+}
+
+event Resolved(IpAddr Addr) {
+	// FIXME actual entry point for calling Open(Addr)
+}
+
+event ResolveFailed() {
+	// FIXME
+}
+
+event Opened() {
+	log("Connection opened!");
+
+	in.clear();
+	out.clear();
+
+	GotoState('Connecting');
+}
+
+event Closed() {
+	log("Connection closed!");
 }
 
 event Timer() {
@@ -85,7 +108,7 @@ event Timer() {
 	}
 }
 
-function connectAck(ByteBuffer buf) {
+event connectAck(ByteBuffer buf) {
 	warn("Received connection ack when not in connecting state!");
 }
 
@@ -93,7 +116,7 @@ function subscribe(String topic) {
 	warn("Cannot subscribe, not connected.");
 }
 
-function subscribeAck(ByteBuffer buf) {
+event subscribeAck(ByteBuffer buf) {
 	warn("Received subscription ack when not in connected state!");
 }
 
@@ -101,21 +124,20 @@ function publish(String topic, String message) {
 	warn("Cannot publish, not connected.");
 }
 
-function publishAck(ByteBuffer buf) {
+event publishAck(ByteBuffer buf) {
 	warn("Received publish ack when not in connected state!");
 }
 
-function published(ByteBuffer buf, byte header) {
+event published(ByteBuffer buf, byte header) {
 	warn("Received published when not in connected state!");
 }
 
-event Opened() {
-	log("Connection opened!");
+event disconnected(ByteBuffer buf) {
+	warn("Received disconnected when not in connected state!");
+}
 
-	in.clear();
-	out.clear();
-
-	GotoState('Connecting');
+function disconnect(byte reasonCode) {
+	warn("Cannot disconnect when not in connected state!");
 }
 
 function sendBuffer(ByteBuffer send) {
@@ -128,15 +150,15 @@ function sendBuffer(ByteBuffer send) {
 	}
 }
 
-function byte connectFlags(bool hasUserName, bool hasPassword, bool willRetain, bool wilQos, bool willFlag, bool cleanStart) {
+function byte connectFlags(bool hasUserName, bool hasPassword, bool willRetain, byte willQos, bool willFlag, bool cleanStart) {
 	local byte b;
 
 	b = 0;
 	if (hasUserName) 	b = b | (1 << 7);
 	if (hasPassword) 	b = b | (1 << 6);
 	if (willRetain) 	b = b | (1 << 5);
-	if (wilQos) 			b = b | (1 << 4);
-	if (wilQos) 			b = b | (1 << 3);
+	if (willQos == 2)	b = b | (1 << 4);
+	if (willQos == 1)	b = b | (1 << 3);
 	if (willFlag) 		b = b | (1 << 2);
 	if (cleanStart) 	b = b | (1 << 1);
 	// final bit reserved
@@ -144,9 +166,6 @@ function byte connectFlags(bool hasUserName, bool hasPassword, bool willRetain, 
 	return b;
 }
 
-event Closed() {
-	log("Connection closed!");
-}
 
 state Connecting {
 
@@ -167,7 +186,7 @@ state Connecting {
 		// connect header
 		out.putString("MQTT"); // protocol header
 		out.put(5); // protocol version, 5.0
-		out.put(connectFlags(false, false, false, false, false, true)); // connect flags
+		out.put(connectFlags(false, false, false, 0, false, true)); // connect flags - NOTE: wills not actually supported
 		out.putShort(60); // keep-alive interval seconds
 
 		//
@@ -192,7 +211,7 @@ state Connecting {
 		sendBuffer(out);
 	}
 
-	function connectAck(ByteBuffer buf) {
+	event connectAck(ByteBuffer buf) {
 		local int len, propsLen;
 		local byte flags, reasonCode, prop;
 
@@ -281,7 +300,12 @@ state Connecting {
 
 state Connected {
 
-	function subscribeAck(ByteBuffer buf) {
+	function BeginState() {
+		log("In Connected state");
+		Subscribe("lol");
+	}
+
+	event subscribeAck(ByteBuffer buf) {
 		local byte reasonCode, prop;
 		local int len, propsLen, ident;
 
@@ -333,7 +357,7 @@ state Connected {
 		//
 		// subscriptions
 		out.putString(topic); // subscription name
-		out.put(0); // subscription options - 0, none
+		out.put((1 << 0)); // subscription options - qos 1 supported
 
 		//
 		// set length and send
@@ -346,21 +370,33 @@ state Connected {
 		sendBuffer(out);
 	}
 
-	function published(ByteBuffer buf, byte header) {
-		local byte reasonCode, prop, b;
+	event published(ByteBuffer buf, byte header) {
+		local byte prop, b, qos;
 		local int len, propsLen, ident;
 		local String topic;
+		local bool isDupe, isRetained;
 
 		log("Got a message!");
+
+		isDupe = ((1 << 3) & header) > 0;
+		isRetained = ((1 << 0) & header) > 0;
+		if (((1 << 1) & header) > 0) qos = 1;
+		else if (((1 << 2) & header) > 0) qos = 2;
 
 		len = buf.getVarInt();
 		len += buf.getPosition();
 
 		topic = buf.getString();
 
-		// FIXME if QoS in header, read ident
-//		ident = buf.getShort();
-//		if (ident != packetIdent) warn("Received packet ident " $ ident $ " but was expecting " $ packetIdent);
+		if (qos > 0) {
+			ident = buf.getShort();
+			if (ident != packetIdent) warn("Received packet ident " $ ident $ " but was expecting " $ packetIdent);
+
+			if (qos > 1) {
+				disconnect(0x9B); // disconnect - QoS not supported
+				return;
+			}
+		}
 
 		propsLen = buf.getVarInt();
 		propsLen += buf.getPosition();
@@ -370,6 +406,7 @@ state Connected {
 				case 0x01: // format indicator
 					log("payload format : " $ buf.get());
 					break;
+				// FIXME more properties
 				default:
 					warn("received unknown property identifier: " $ prop);
 					return;
@@ -380,17 +417,83 @@ state Connected {
 			// this is the payload
 			b = buf.get();
 			log(Chr(b));
-//			reasonCode = buf.get();
-//			log("reason code: " $ reasonCode);
 		}
 
-		// TODO if QoS in header, send ACK/REC
+		if (qos == 1) sendPublishAck(ident, 0);
 	}
 
+	function sendPublishAck(int ident, byte reasonCode) {
+		local int was;
 
-Begin:
-	log("In Connected state");
-	Subscribe("lol");
+		log("Sending publish ack for packet " $ ident);
+
+		out.compact();
+
+		//
+		// packet header
+		out.put(1 << 6); // puback message identifier
+		out.mark(); // remember position, we need to return here to set the length
+		out.put(0); // the length will go here after we construct the body
+
+		//
+		// puback header
+		out.putShort(ident); // packet identifier
+		out.put(reasonCode); // packet identifier
+		out.put(0); // properties length - 0, none
+
+		//
+		// properties
+		// no properties included. options are:
+		// 0x1F: reason string
+		// 0x26: user property (string key/value pair)
+
+		//
+		// set length and send
+		was = out.getPosition();
+		out.reset(); // return to mark
+		out.putVarInt(was - out.getPosition() - 1);
+		out.setPosition(was);
+		out.flip();
+
+		sendBuffer(out);
+	}
+
+	function disconnect(byte reasonCode) {
+		local int was;
+
+		warn("Disconnecting with reason code " $ reasonCode);
+
+		out.compact();
+
+		//
+		// packet header
+		out.put((1 << 7) | (1 << 6) | (1 << 5)); // disconnect message identifier
+		out.mark(); // remember position, we need to return here to set the length
+		out.put(0); // the length will go here after we construct the body
+
+		//
+		// disconnect header
+		out.put(reasonCode); // reason code identifier
+		out.put(0); // properties length - 0, none
+
+		//
+		// properties
+		// no properties included. options are:
+		// 0x11: Session Expiry Interval
+		// 0x1F: Reason String
+		// 0x26: User Property
+		// 0x1C: Server Reference
+
+		//
+		// set length and send
+		was = out.getPosition();
+		out.reset(); // return to mark
+		out.putVarInt(was - out.getPosition() - 1);
+		out.setPosition(was);
+		out.flip();
+
+		sendBuffer(out);
+	}
 }
 
 defaultproperties {
