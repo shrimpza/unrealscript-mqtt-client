@@ -3,10 +3,13 @@ class MQTTClient extends TCPLink;
 // connection properties
 var String mqttHost;
 var int mqttPort;
+var int sessionTtl;
 var String clientIdent;
 
 // state
 var private int packetIdent;
+var private int keepAlive; // interval between pings, set to sessionTtl, or overridden by server
+var private float pingTime; // RTT for ping requests
 
 var private ByteBuffer out;
 var private ByteBuffer in;
@@ -23,8 +26,6 @@ function PreBeginPlay() {
 }
 
 function PostBeginPlay() {
-	local IpAddr ip;
-
 	Super.PostBeginPlay();
 
 	packetIdent = 0;
@@ -33,35 +34,28 @@ function PostBeginPlay() {
   LinkMode = MODE_Binary;
   ReceiveMode = RMODE_Manual;
 
-	// FIXME call Resolve(mqttHost), continue processing in Resolved(Addr)
-	if (StringToIpAddr(mqttHost, ip)) {
-		ip.port = mqttPort;
-		log("Got IP for host " $ mqttHost $ " = " $ ip.Addr);
-	} else {
-		warn("Failed to get IP for host " $ mqttHost);
+  // initiate connection process by resolving the host
+  Resolve(mqttHost);
+}
+
+event Resolved(IpAddr Addr) {
+  log("Resolved host " $ mqttHost $ " = " $ Addr.Addr);
+  Addr.port = mqttPort;
+
+	if (BindPort() == 0) {
+		warn("Failed to bind client port.");
 		return;
 	}
 
-	if(BindPort() == 0) {
-		warn("Error binding local port.");
-		return;
-	}
-
-	// FIXME move to Resolved
-	if (Open(ip)) {
+	if (Open(Addr)) {
 		log("Connected!");
-		SetTimer(1, True);
 	} else {
 		warn("Connection failed!");
 	}
 }
 
-event Resolved(IpAddr Addr) {
-	// FIXME actual entry point for calling Open(Addr)
-}
-
 event ResolveFailed() {
-	// FIXME
+	warn("Failed to resolve host " $ mqttHost);
 }
 
 event Opened() {
@@ -77,18 +71,15 @@ event Closed() {
 	log("Connection closed!");
 }
 
-event Timer() {
+event Tick(float DeltaTime) {
 	local byte buf[255];
 	local byte next;
 	local int read;
-
-	log("IsConnected: " $ IsConnected());
 
 	if (IsDataPending()) {
 		in.compact();
 		do {
 			read = ReadBinary(Min(in.remaining(), 255), buf);
-			log("read = " $ read);
 			if (read > 0) in.putBytes(buf, 0, read);
 		} until (read == 0 || !in.hasRemaining())
 		in.flip();
@@ -96,7 +87,9 @@ event Timer() {
 
 	if (in.hasRemaining()) {
 		next = in.get();
-		if (((1 << 4) & next) > 0 && ((1 << 5) & next) > 0) { // PUBLISH message
+		if (((1 << 4) & next) > 0 && ((1 << 6) & next) > 0 && ((1 << 7) & next) > 0) { // PINGRESP message
+			pingAck(in);
+		} else if (((1 << 4) & next) > 0 && ((1 << 5) & next) > 0) { // PUBLISH message
 			published(in, next);
 		} else if (((1 << 4) & next) > 0 && ((1 << 7) & next) > 0) { // SUBACK message
 			subscribeAck(in);
@@ -108,8 +101,12 @@ event Timer() {
 	}
 }
 
+event Timer() {
+	log("IsConnected: " $ IsConnected());
+}
+
 event connectAck(ByteBuffer buf) {
-	warn("Received connection ack when not in connecting state!");
+	warn("Received connection ack when not connecting!");
 }
 
 function subscribe(String topic) {
@@ -117,7 +114,7 @@ function subscribe(String topic) {
 }
 
 event subscribeAck(ByteBuffer buf) {
-	warn("Received subscription ack when not in connected state!");
+	warn("Received subscription ack when not connected!");
 }
 
 function publish(String topic, String message) {
@@ -125,19 +122,27 @@ function publish(String topic, String message) {
 }
 
 event publishAck(ByteBuffer buf) {
-	warn("Received publish ack when not in connected state!");
+	warn("Received publish ack when not connected!");
 }
 
 event published(ByteBuffer buf, byte header) {
-	warn("Received published when not in connected state!");
+	warn("Received published when not connected!");
 }
 
 event disconnected(ByteBuffer buf) {
-	warn("Received disconnected when not in connected state!");
+	warn("Received disconnected when not connected!");
 }
 
 function disconnect(byte reasonCode) {
-	warn("Cannot disconnect when not in connected state!");
+	warn("Cannot disconnect when not connected!");
+}
+
+function ping() {
+	warn("Cannot send ping, not connected.");
+}
+
+event pingAck(ByteBuffer buf) {
+	warn("Received ping ack when not connected!");
 }
 
 function setLengthAndSend(ByteBuffer send) {
@@ -188,6 +193,8 @@ state Connecting {
 	function BeginState() {
 		log("In Connecting state");
 
+		keepAlive = sessionTtl;
+
 		out.compact();
 
 		//
@@ -201,14 +208,14 @@ state Connecting {
 		out.putString("MQTT"); // protocol header
 		out.put(5); // protocol version, 5.0
 		out.put(connectFlags(false, false, false, 0, false, true)); // connect flags - NOTE: wills not actually supported
-		out.putShort(60); // keep-alive interval seconds
+		out.putShort(sessionTtl); // keep-alive interval seconds
 
 		//
 		// properties - FIXME could be an additional buffer, but just pre-calculating the size now since this is simplistic
 		out.putVarInt(5);
 		// max packet size property
 		out.put(39);
-		out.putInt(512); // max packet to 512
+		out.putInt(in.CAPACITY); // max packet to buffer capacity
 
 		//
 		// payload
@@ -281,7 +288,8 @@ state Connecting {
 				  break;
 				case 0x13: // server keep alive
 				  // 2 byte short
-				  log("server keep alive: " $ buf.getShort());
+				  keepAlive = buf.getShort();
+				  log("server keep alive: " $ keepAlive);
 				  break;
 				case 0x1a: // response information
 				  log("response information: " $ buf.getString());
@@ -310,7 +318,16 @@ state Connected {
 
 	function BeginState() {
 		log("In Connected state");
+
+		// set the keep-alive/ping timer.
+		// we ping twice as frequently as the session TTL to allow some time margin.
+		// this is not a repeating timer - we schedule the timer again once we receive an ack
+		SetTimer(keepAlive / 2, False);
 		Subscribe("lol");
+	}
+
+	event Timer() {
+		ping();
 	}
 
 	event subscribeAck(ByteBuffer buf) {
@@ -390,8 +407,6 @@ state Connected {
 
 		if (qos > 0) {
 			ident = buf.getShort();
-			if (ident != packetIdent) warn("Received packet ident " $ ident $ " but was expecting " $ packetIdent);
-
 			if (qos > 1) {
 				disconnect(0x9B); // disconnect - QoS not supported
 				return;
@@ -478,10 +493,40 @@ state Connected {
 		// send
 		setLengthAndSend(out);
 	}
+
+	function ping() {
+		log("Send ping");
+
+		pingTime = Level.TimeSeconds;
+
+		out.compact();
+
+		//
+		// packet header
+		out.put((1 << 7) | (1 << 6)); // pingreq message identifier
+		out.put(0); // zero length payload
+
+		out.flip();
+
+		sendBuffer(out);
+	}
+
+	function pingAck(ByteBuffer buf) {
+		log("Received ping response in " $ (Level.TimeSeconds - pingTime) $ "s");
+
+		// null byte
+		if (buf.get() != 0) {
+			warn("Error, received a value in ping response where none was expected");
+			disconnect(0x82); // protocol error
+		}
+
+		SetTimer(keepAlive / 2, False);
+	}
 }
 
 defaultproperties {
 	clientIdent="utserver"
   mqttHost="192.168.2.128"
   mqttPort=1883
+  sessionTtl=60
 }
