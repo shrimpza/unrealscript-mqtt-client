@@ -140,6 +140,22 @@ function disconnect(byte reasonCode) {
 	warn("Cannot disconnect when not in connected state!");
 }
 
+function setLengthAndSend(ByteBuffer send) {
+		local int was;
+
+		// NOTE assumes mark is at the position we want to set the length at
+
+		//
+		// set length and send
+		was = out.getPosition();
+		out.reset(); // return to mark
+		out.putVarInt(was - out.getPosition() - 1);
+		out.setPosition(was);
+		out.flip();
+
+		sendBuffer(out);
+}
+
 function sendBuffer(ByteBuffer send) {
 	local byte b[255];
 	local int len;
@@ -170,8 +186,6 @@ function byte connectFlags(bool hasUserName, bool hasPassword, bool willRetain, 
 state Connecting {
 
 	function BeginState() {
-		local int was;
-
 		log("In Connecting state");
 
 		out.compact();
@@ -201,14 +215,8 @@ state Connecting {
 		out.putString(clientIdent); // client identifier
 
 		//
-		// set length and send
-		was = out.getPosition();
-		out.reset(); // return to mark
-		out.putVarInt(was - out.getPosition() - 1);
-		out.setPosition(was);
-		out.flip();
-
-		sendBuffer(out);
+		// send
+		setLengthAndSend(out);
 	}
 
 	event connectAck(ByteBuffer buf) {
@@ -337,8 +345,6 @@ state Connected {
 	}
 
 	function subscribe(String topic) {
-		local int was;
-
 		log("Subscribing to topic " $ topic);
 
 		out.compact();
@@ -360,14 +366,8 @@ state Connected {
 		out.put((1 << 0)); // subscription options - qos 1 supported
 
 		//
-		// set length and send
-		was = out.getPosition();
-		out.reset(); // return to mark
-		out.putVarInt(was - out.getPosition() - 1);
-		out.setPosition(was);
-		out.flip();
-
-		sendBuffer(out);
+		// send
+		setLengthAndSend(out);
 	}
 
 	event published(ByteBuffer buf, byte header) {
@@ -423,8 +423,6 @@ state Connected {
 	}
 
 	function sendPublishAck(int ident, byte reasonCode) {
-		local int was;
-
 		log("Sending publish ack for packet " $ ident);
 
 		out.compact();
@@ -448,19 +446,11 @@ state Connected {
 		// 0x26: user property (string key/value pair)
 
 		//
-		// set length and send
-		was = out.getPosition();
-		out.reset(); // return to mark
-		out.putVarInt(was - out.getPosition() - 1);
-		out.setPosition(was);
-		out.flip();
-
-		sendBuffer(out);
+		// send
+		setLengthAndSend(out);
 	}
 
 	function disconnect(byte reasonCode) {
-		local int was;
-
 		warn("Disconnecting with reason code " $ reasonCode);
 
 		out.compact();
@@ -485,14 +475,8 @@ state Connected {
 		// 0x1C: Server Reference
 
 		//
-		// set length and send
-		was = out.getPosition();
-		out.reset(); // return to mark
-		out.putVarInt(was - out.getPosition() - 1);
-		out.setPosition(was);
-		out.flip();
-
-		sendBuffer(out);
+		// send
+		setLengthAndSend(out);
 	}
 }
 
