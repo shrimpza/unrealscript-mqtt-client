@@ -253,12 +253,17 @@ function String getString() {
 }
 
 // FIXME doc to note short prefix
-function int putString(String str) {
-	local int i, was;
-	if (!canWrite(2 + Len(str))) return -1;
+function int putString(String str, optional bool noLengthPrefix) {
+	local int i, was, strLen;
+
+	if (noLengthPrefix) strLen = Len(str);
+	else strLen = 2 + Len(str);
+
+	if (!canWrite(strLen)) return -1;
 	was = position;
 
-	putShort(Len(str));
+	if (!noLengthPrefix) putShort(Len(str));
+
 	for (i = 0; i < Len(str); i++) {
 		buf[position++] = Asc(Mid(str, i, 1));
 	}

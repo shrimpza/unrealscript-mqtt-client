@@ -409,18 +409,19 @@ state Connected {
   		//
   		// publish header
   		out.putString(topic);
-  		out.putShort(++packetIdent); // packet identifier - ack should match this
+  		// if qos, include packet ident for ack
+  		//out.putShort(++packetIdent); // packet identifier - ack should match this
 
   		//
   		// publish properties
-  		out.put(2); // properties length - length FIXME maybe
+  		out.putVarInt(2); // properties length - length FIXME maybe
   		// payload format indicator: set to string
   		out.put(0x01); // property identifier
   		out.put(0x01); // value - string
 
 			//
 			// publish payload
-			if (out.putString(message) < 0) {
+			if (out.putString(message, true) < 0) {
 				warn("Message was too large to publish, not sending");
 				return;
 			}
