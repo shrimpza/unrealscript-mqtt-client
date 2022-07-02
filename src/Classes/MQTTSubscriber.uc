@@ -10,23 +10,16 @@
 //=============================================================================
 class MQTTSubscriber extends Info;
 
-//var private String topic;
-//var private MQTTClient mqtt;
+var String topic;
+var int subscriptionIdent;
 
 function PostBeginPlay() {
-	SetTimer(0.1, False);
-}
-
-event Timer() {
 	local MQTTClient mqtt;
 	mqtt = MQTTClient(Owner);
-	if (mqtt != None) {
-		log("My Tag is " $ tag);
-		mqtt.addSubscriber(String(Tag), Self);
-	}
+	if (mqtt != None) mqtt.newSubscriber(Self);
 }
 
-event subscribed(String topic) {
+event subscribed() {
 	log("Subscriber " $ Self $ " subscribed to topic " $ topic);
 }
 
@@ -35,4 +28,5 @@ event receiveMessage(String topic, String message) {
 }
 
 defaultproperties {
+	topic="utserver"
 }

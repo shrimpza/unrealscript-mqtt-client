@@ -1,13 +1,5 @@
 class MQTTClient extends TCPLink;
 
-struct Subscriber {
-	var String topic;
-	var MQTTSubscriber subscriber;
-	var bool active;
-};
-
-const MAX_SUBSCRIBERS = 128;
-
 // connection properties
 var String mqttHost;
 var int mqttPort;
@@ -21,8 +13,6 @@ var private float pingTime; // RTT for ping requests
 
 var private transient ByteBuffer out;
 var private transient ByteBuffer in;
-
-var private transient Subscriber subscribers[MAX_SUBSCRIBERS];
 
 static final operator(18) int % (int A, int B) {
 	return A - (A / B) * B;
@@ -41,6 +31,30 @@ function PreBeginPlay() {
 
 function bool IsConnectionEstablished() {
 	return isInState('Connected');
+}
+
+event GainedChild(Actor other) {
+	// if is a MQTTSubscriber, it's a new subscription
+}
+
+event LostChild(Actor other) {
+	// if is a MQTTSubscriber, unsubscribe
+	local MQTTSubscriber subscriber, it;
+
+	subscriber = MQTTSubscriber(other);
+	if (subscriber == None) return;
+
+	ForEach ChildActors(class'MQTTSubscriber', it) {
+		// there's still another active subscriber on this topic - so to not unsubscribe
+		if (it != subscriber && it.topic == subscriber.topic) return;
+	}
+
+	if (isConnectionEstablished()) unsubscribe(subscriber.topic);
+}
+
+// FIXME can this move to GainedChild - enqueue something to be executed following tick
+event newSubscriber(MQTTSubscriber subscriber) {
+	if (isConnectionEstablished()) subscribe(subscriber.topic);
 }
 
 event Closed() {
@@ -81,55 +95,11 @@ event Tick(float DeltaTime) {
 	}
 }
 
-function addSubscriber(String topic, MQTTSubscriber sub) {
-	local int i;
-	local bool knownTopic, added;
-	local Subscriber newSub;
-
-	newSub.topic = topic;
-	newSub.subscriber = sub;
-	newSub.active = true;
-
-	for (i = 0; i < MAX_SUBSCRIBERS; i++) {
-		knownTopic = !knownTopic && subscribers[i].topic == topic;
-		if (!added && !subscribers[i].active) {
-			subscribers[i] = newSub;
-			added = true;
-		}
-	}
-
-	if (IsConnectionEstablished()) {
-		if (!knownTopic) {
-			subscribe(topic);
-		} else {
-			sub.subscribed(topic);
-		}
-	}
-}
-
-function removeSubscriber(String topic, Actor sub) {
-	local int i;
-	local bool activeTopic;
-
-	for (i = 0; i < MAX_SUBSCRIBERS; i++) {
-		if (subscribers[i].topic == topic && subscribers[i].subscriber == sub) {
-			subscribers[i].subscriber = None;
-			subscribers[i].active = false;
-			subscribers[i].topic = "";
-		}
-		activeTopic = !activeTopic && subscribers[i].active && subscribers[i].topic == topic;
-	}
-
-	if (!activeTopic && IsInState('Connected')) {
-		unsubscribe(topic);
-	}
-}
-
 event connectAck(ByteBuffer buf) {
 	warn("Received connection ack when not connecting!");
 }
 
-function subscribe(String topic) {
+function subscribe(String topic, optional MQTTSubscriber subscriber) {
 	warn("Cannot subscribe, not connected.");
 }
 
@@ -391,7 +361,8 @@ state Connecting {
 state Connected {
 
 	function BeginState() {
-		local int i;
+		local MQTTSubscriber sub;
+
 		log("In Connected state");
 
 		// set the keep-alive/ping timer.
@@ -399,12 +370,8 @@ state Connected {
 		// this is not a repeating timer - we schedule the timer again once we receive an ack
 		SetTimer(keepAlive / 2, False);
 
-
-		// configure expected subscriptions
-		for (i = 0; i < MAX_SUBSCRIBERS; i++) {
-			if (subscribers[i].active) {
-				subscribe(subscribers[i].topic);
-			}
+		ForEach ChildActors(class'MQTTSubscriber', sub) {
+			subscribe(sub.topic);
 		}
 	}
 
@@ -412,8 +379,13 @@ state Connected {
 		ping();
 	}
 
-	function subscribe(String topic) {
+	function subscribe(String topic, optional MQTTSubscriber subscriber) {
+		local int ident;
+		ident = ++packetIdent;
+
 		log("Subscribing to topic " $ topic);
+
+		if (subscriber != None) subscriber.subscriptionIdent = ident;
 
 		out.compact();
 
@@ -425,7 +397,7 @@ state Connected {
 
 		//
 		// subscription header
-		out.putShort(++packetIdent); // packet identifier - ack should match this
+		out.putShort(ident); // packet identifier, can use to correlate back to
 		out.put(0); // properties length - 0, none
 
 		//
@@ -441,13 +413,13 @@ state Connected {
 	event subscribeAck(ByteBuffer buf) {
 		local byte reasonCode, prop;
 		local int len, propsLen, ident;
+		local MQTTSubscriber sub;
 
 		log("Subscribed!");
 
 		len = buf.getVarInt();
 		len += buf.getPosition();
 		ident = buf.getShort();
-		if (ident != packetIdent) warn("Received packet ident " $ ident $ " but was expecting " $ packetIdent);
 		propsLen = buf.getVarInt();
 		propsLen += buf.getPosition();
 		while (buf.getPosition() < propsLen) {
@@ -466,6 +438,10 @@ state Connected {
 		while (buf.getPosition() < len) {
 			reasonCode = buf.get();
 			log("reason code: " $ reasonCode);
+		}
+
+		ForEach ChildActors(class'MQTTSubscriber', sub) {
+			if (sub.subscriptionIdent == ident) sub.subscribed();
 		}
 	}
 
@@ -569,6 +545,7 @@ state Connected {
 		local int len, propsLen, ident;
 		local String topic, payload;
 		local bool isDupe, isRetained;
+		local MQTTSubscriber sub;
 
 		log("Got a message!");
 
@@ -638,6 +615,10 @@ state Connected {
 		}
 
 		log("Received publish payload: " $ payload);
+
+		ForEach ChildActors(class'MQTTSubscriber', sub) {
+			if (sub.topic == topic) sub.receiveMessage(topic, payload);
+		}
 
 		if (qos == 1) sendPublishAck(ident, 0);
 	}
