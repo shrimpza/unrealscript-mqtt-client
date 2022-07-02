@@ -1,11 +1,24 @@
 class MQTTClientTest extends Mutator;
 
+var private MQTTClient mqtt;
+var private MQTTSubscriber sub;
 
 function PostBeginPlay() {
 	log("Hello world");
-	Spawn(class'MQTTClient', self);
+	mqtt = Spawn(class'MQTTClient', self);
+	sub = Spawn(class'MQTTSubscriber', mqtt, 'first_topic');
+//	sub.init(mqtt, "first_topic");
+
+	SetTimer(10, False);
 
 	ByteBufferTest();
+}
+
+event Timer() {
+//	if (!subbed) mqtt.addSubscriber("testing", Self);
+//	else mqtt.removeSubscriber("testing", Self);
+//	subbed = !subbed;
+//	SetTimer(10, False);
 }
 
 function ByteBufferTest() {

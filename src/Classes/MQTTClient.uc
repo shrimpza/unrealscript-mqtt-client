@@ -1,5 +1,13 @@
 class MQTTClient extends TCPLink;
 
+struct Subscriber {
+	var String topic;
+	var MQTTSubscriber subscriber;
+	var bool active;
+};
+
+const MAX_SUBSCRIBERS = 128;
+
 // connection properties
 var String mqttHost;
 var int mqttPort;
@@ -7,12 +15,14 @@ var int sessionTtl;
 var String clientIdent;
 
 // state
-var private int packetIdent;
+var private transient int packetIdent;
 var private int keepAlive; // interval between pings, set to sessionTtl, or overridden by server
 var private float pingTime; // RTT for ping requests
 
-var private ByteBuffer out;
-var private ByteBuffer in;
+var private transient ByteBuffer out;
+var private transient ByteBuffer in;
+
+var private transient Subscriber subscribers[MAX_SUBSCRIBERS];
 
 static final operator(18) int % (int A, int B) {
 	return A - (A / B) * B;
@@ -27,6 +37,10 @@ function PreBeginPlay() {
 
 	out = new class'ByteBuffer';
 	in = new class'ByteBuffer';
+}
+
+function bool IsConnectionEstablished() {
+	return isInState('Connected');
 }
 
 event Closed() {
@@ -64,6 +78,50 @@ event Tick(float DeltaTime) {
 		} else if (((1 << 6) & next) > 0) { // PUBACK message
 			publishAck(in);
 		}
+	}
+}
+
+function addSubscriber(String topic, MQTTSubscriber sub) {
+	local int i;
+	local bool knownTopic, added;
+	local Subscriber newSub;
+
+	newSub.topic = topic;
+	newSub.subscriber = sub;
+	newSub.active = true;
+
+	for (i = 0; i < MAX_SUBSCRIBERS; i++) {
+		knownTopic = !knownTopic && subscribers[i].topic == topic;
+		if (!added && !subscribers[i].active) {
+			subscribers[i] = newSub;
+			added = true;
+		}
+	}
+
+	if (IsConnectionEstablished()) {
+		if (!knownTopic) {
+			subscribe(topic);
+		} else {
+			sub.subscribed(topic);
+		}
+	}
+}
+
+function removeSubscriber(String topic, Actor sub) {
+	local int i;
+	local bool activeTopic;
+
+	for (i = 0; i < MAX_SUBSCRIBERS; i++) {
+		if (subscribers[i].topic == topic && subscribers[i].subscriber == sub) {
+			subscribers[i].subscriber = None;
+			subscribers[i].active = false;
+			subscribers[i].topic = "";
+		}
+		activeTopic = !activeTopic && subscribers[i].active && subscribers[i].topic == topic;
+	}
+
+	if (!activeTopic && IsInState('Connected')) {
+		unsubscribe(topic);
 	}
 }
 
@@ -333,13 +391,21 @@ state Connecting {
 state Connected {
 
 	function BeginState() {
+		local int i;
 		log("In Connected state");
 
 		// set the keep-alive/ping timer.
 		// we ping twice as frequently as the session TTL to allow some time margin.
 		// this is not a repeating timer - we schedule the timer again once we receive an ack
 		SetTimer(keepAlive / 2, False);
-		Subscribe("lol");
+
+
+		// configure expected subscriptions
+		for (i = 0; i < MAX_SUBSCRIBERS; i++) {
+			if (subscribers[i].active) {
+				subscribe(subscribers[i].topic);
+			}
+		}
 	}
 
 	event Timer() {
@@ -401,8 +467,6 @@ state Connected {
 			reasonCode = buf.get();
 			log("reason code: " $ reasonCode);
 		}
-
-		publish("lol", "hello world!");
 	}
 
 	function unsubscribe(String topic) {
