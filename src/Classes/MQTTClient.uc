@@ -15,15 +15,15 @@ var private ByteBuffer out;
 var private ByteBuffer in;
 
 static final operator(18) int % (int A, int B) {
-  return A - (A / B) * B;
+	return A - (A / B) * B;
 }
 
 function PreBeginPlay() {
 	Super.PreBeginPlay();
 
 	// these need to be set at runtime
-  LinkMode = MODE_Binary;
-  ReceiveMode = RMODE_Manual;
+	LinkMode = MODE_Binary;
+	ReceiveMode = RMODE_Manual;
 
 	out = new class'ByteBuffer';
 	in = new class'ByteBuffer';
@@ -51,7 +51,9 @@ event Tick(float DeltaTime) {
 
 	if (in.hasRemaining()) {
 		next = in.get();
-		if (((1 << 4) & next) > 0 && ((1 << 6) & next) > 0 && ((1 << 7) & next) > 0) { // PINGRESP message
+		if (((1 << 7) & next) > 0 && ((1 << 5) & next) > 0 && ((1 << 4) & next) > 0) { // UNSUBACK message
+			unsubscribeAck(in);
+		} else if (((1 << 4) & next) > 0 && ((1 << 6) & next) > 0 && ((1 << 7) & next) > 0) { // PINGRESP message
 			pingAck(in);
 		} else if (((1 << 4) & next) > 0 && ((1 << 5) & next) > 0) { // PUBLISH message
 			published(in, next);
@@ -75,6 +77,14 @@ function subscribe(String topic) {
 
 event subscribeAck(ByteBuffer buf) {
 	warn("Received subscription ack when not connected!");
+}
+
+function unsubscribe(String topic) {
+	warn("Cannot unsubscribe, not connected.");
+}
+
+event unsubscribeAck(ByteBuffer buf) {
+	warn("Received unsubscribe ack when not connected!");
 }
 
 function publish(String topic, String message) {
@@ -142,38 +152,38 @@ auto state NotConnected {
 	function connect() {
 		packetIdent = 0; // reset our packet identifier
 
-    // initiate connection process by resolving the host
-    Resolve(mqttHost);
+		// initiate connection process by resolving the host
+		Resolve(mqttHost);
 	}
 
 	event Resolved(IpAddr Addr) {
-    log("Resolved host " $ mqttHost $ " = " $ Addr.Addr);
-    Addr.port = mqttPort;
+		log("Resolved host " $ mqttHost $ " = " $ Addr.Addr);
+		Addr.port = mqttPort;
 
-  	if (BindPort() == 0) {
-  		warn("Failed to bind client port.");
-  		return;
-  	}
+		if (BindPort() == 0) {
+			warn("Failed to bind client port.");
+			return;
+		}
 
-  	if (Open(Addr)) {
-  		log("Connected!");
-  	} else {
-  		warn("Connection failed!");
-  	}
-  }
+		if (Open(Addr)) {
+			log("Connected!");
+		} else {
+			warn("Connection failed!");
+		}
+	}
 
-  event ResolveFailed() {
-  	warn("Failed to resolve host " $ mqttHost);
-  }
+	event ResolveFailed() {
+		warn("Failed to resolve host " $ mqttHost);
+	}
 
-  event Opened() {
-  	log("Connection opened!");
+	event Opened() {
+		log("Connection opened!");
 
-  	in.clear();
-  	out.clear();
+		in.clear();
+		out.clear();
 
-  	GotoState('Connecting');
-  }
+		GotoState('Connecting');
+	}
 }
 
 state Connecting {
@@ -225,74 +235,74 @@ state Connecting {
 		propsLen = buf.getVarInt();
 		propsLen += buf.getPosition();
 		while (buf.getPosition() < propsLen) {
-		  prop = buf.get();
+			prop = buf.get();
 			switch (prop) {
 				case 0x11: // Session Expiry Interval
-				  // 4 byte int
-				  log("Session Expiry Interval: " $ buf.getInt());
-				  break;
+					// 4 byte int
+					log("Session Expiry Interval: " $ buf.getInt());
+					break;
 				case 0x21: // Receive Maximum
-				  // 2 byte short
-				  log("Receive Maximum: " $ buf.getShort());
-				  break;
+					// 2 byte short
+					log("Receive Maximum: " $ buf.getShort());
+					break;
 				case 0x24: // Maximum QoS
-				  // 1 byte
-				  log("Maximum QoS: " $ buf.get());
-				  break;
+					// 1 byte
+					log("Maximum QoS: " $ buf.get());
+					break;
 				case 0x25: // Retain Available
-				  // 1 byte
-				  log("Retain Available: " $ buf.get());
-				  break;
+					// 1 byte
+					log("Retain Available: " $ buf.get());
+					break;
 				case 0x27: // Maximum Packet Size
-				  // 2 byte short
-				  log("Maximum Packet Size: " $ buf.getShort());
-				  break;
+					// 2 byte short
+					log("Maximum Packet Size: " $ buf.getShort());
+					break;
 				case 0x18: // Assigned Client Identifier
-				  // variable length string
-				  clientIdent = buf.getString();
-				  log("Assigned Client Identifier: " $ clientIdent);
-				  break;
+					// variable length string
+					clientIdent = buf.getString();
+					log("Assigned Client Identifier: " $ clientIdent);
+					break;
 				case 0x22: // Topic Alias Maximum
-				  // 2 byte short
-				  log("Topic Alias Maximum: " $ buf.getShort());
-				  break;
+					// 2 byte short
+					log("Topic Alias Maximum: " $ buf.getShort());
+					break;
 				case 0x1f: // Reason String
 					log("Reason String: " $ buf.getString());
-				  break;
+					break;
 				case 0x26: // User Property, repeats
 					log("User Property name : " $ buf.getString());
 					log("User Property value: " $ buf.getString());
-				  break;
+					break;
 				case 0x28: // Wildcard Subscription Available
-				  // 1 byte
-				  log("Wildcard Subscription Available: " $ buf.get());
-				  break;
+					// 1 byte
+					log("Wildcard Subscription Available: " $ buf.get());
+					break;
 				case 0x29: // Subscription Identifiers Available
-				  // 1 byte
-				  log("Subscription Identifiers Available: " $ buf.get());
-				  break;
+					// 1 byte
+					log("Subscription Identifiers Available: " $ buf.get());
+					break;
 				case 0x2a: // Shared Subscription Available
-				  // 1 byte
-				  log("Shared Subscription Available: " $ buf.get());
-				  break;
+					// 1 byte
+					log("Shared Subscription Available: " $ buf.get());
+					break;
 				case 0x13: // Server Keep Alive
-				  // 2 byte short
-				  keepAlive = buf.getShort();
-				  log("Server Keep Alive: " $ keepAlive);
-				  break;
+					// 2 byte short
+					keepAlive = buf.getShort();
+					log("Server Keep Alive: " $ keepAlive);
+					break;
 				case 0x1a: // Response Information
-				  log("Response Information: " $ buf.getString());
-				  break;
+					log("Response Information: " $ buf.getString());
+					break;
 				case 0x1a: // Server Reference
-				  log("Server Reference: " $ buf.getString());
-				  break;
+					log("Server Reference: " $ buf.getString());
+					break;
 				case 0x15: // Authentication Method
-				  log("Authentication Method: " $ buf.getString());
-				  break;
+					log("Authentication Method: " $ buf.getString());
+					break;
 				case 0x16: // Authentication Data
-				  // ... byte binary data... everything until end of properties?
-				  buf.setPosition(propsLen);
-				  break;
+					// ... byte binary data... everything until end of properties?
+					buf.setPosition(propsLen);
+					break;
 				default:
 					warn("received unknown property identifier: " $ prop);
 					return;
@@ -395,29 +405,88 @@ state Connected {
 		publish("lol", "hello world!");
 	}
 
+	function unsubscribe(String topic) {
+		log("Unsubscribe from topic " $ topic);
+
+		out.compact();
+
+		//
+		// packet header
+		out.put((1 << 7) | (1 << 5) | (1 << 1)); // unsubscribe message identifier
+		out.mark(); // remember position, we need to return here to set the length
+		out.put(0); // the length will go here after we construct the body
+
+		//
+		// subscription header
+		out.putShort(++packetIdent); // packet identifier - ack should match this
+		out.put(0); // properties length - 0, none
+
+		//
+		// subscriptions
+		out.putString(topic); // subscription name
+
+		//
+		// send
+		setLengthAndSend(out);
+	}
+
+	event unsubscribeAck(ByteBuffer buf) {
+		local byte reasonCode, prop;
+		local int len, propsLen, ident;
+
+		log("Unsubscribed!");
+
+		len = buf.getVarInt();
+		len += buf.getPosition();
+		ident = buf.getShort();
+		if (ident != packetIdent) warn("Received packet ident " $ ident $ " but was expecting " $ packetIdent);
+		propsLen = buf.getVarInt();
+		propsLen += buf.getPosition();
+		while (buf.getPosition() < propsLen) {
+			prop = buf.get();
+			switch (prop) {
+				case 0x1f: // Reason String
+					log("Reason String: " $ buf.getString());
+					break;
+				case 0x26: // User Property, repeats
+					log("User Property name: " $ buf.getString());
+					log("User Property value: " $ buf.getString());
+					break;
+				default:
+					warn("received unknown property identifier: " $ prop);
+					return;
+			}
+		}
+
+		while (buf.getPosition() < len) {
+			reasonCode = buf.get();
+			log("reason code: " $ reasonCode);
+		}
+	}
+
 	function publish(String topic, String message) {
 			log("Publishing to topic " $ topic);
 
-  		out.compact();
+			out.compact();
 
-  		//
-  		// packet header
-  		out.put((1 << 5) | (1 << 4)); // publish message identifier
-  		out.mark(); // remember position, we need to return here to set the length
-  		out.put(0); // the length will go here after we construct the body
+			//
+			// packet header
+			out.put((1 << 5) | (1 << 4)); // publish message identifier
+			out.mark(); // remember position, we need to return here to set the length
+			out.put(0); // the length will go here after we construct the body
 
-  		//
-  		// publish header
-  		out.putString(topic);
-  		// if qos, include packet ident for ack
-  		//out.putShort(++packetIdent); // packet identifier - ack should match this
+			//
+			// publish header
+			out.putString(topic);
+			// if qos, include packet ident for ack
+			//out.putShort(++packetIdent); // packet identifier - ack should match this
 
-  		//
-  		// publish properties
-  		out.putVarInt(2); // properties length - length FIXME maybe
-  		// payload format indicator: set to string
-  		out.put(0x01); // property identifier
-  		out.put(0x01); // value - string
+			//
+			// publish properties
+			out.putVarInt(2); // properties length - length FIXME maybe
+			// payload format indicator: set to string
+			out.put(0x01); // property identifier
+			out.put(0x01); // value - string
 
 			//
 			// publish payload
@@ -426,9 +495,9 @@ state Connected {
 				return;
 			}
 
-  		//
-  		// send
-  		setLengthAndSend(out);
+			//
+			// send
+			setLengthAndSend(out);
 	}
 
 	event published(ByteBuffer buf, byte header) {
@@ -598,7 +667,7 @@ state Connected {
 
 defaultproperties {
 	clientIdent="utserver"
-  mqttHost="192.168.2.128"
-  mqttPort=1883
-  sessionTtl=60
+	mqttHost="192.168.2.128"
+	mqttPort=1883
+	sessionTtl=60
 }
