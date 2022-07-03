@@ -5,6 +5,8 @@ class MQTTClient extends TCPLink
 var config String mqttHost;
 var config int mqttPort;
 var config int sessionTtl;
+var config String mqttUser;
+var config String mqttPass;
 var config String clientIdent;
 
 // state
@@ -125,8 +127,6 @@ event Tick(float DeltaTime) {
 			connectAck(in);
 		} else if (((1 << 6) & next) > 0) { // PUBACK message
 			publishAck(in);
-		} else {
-			warn("Unknown packet identifier value received: " $ next);
 		}
 	}
 
@@ -297,7 +297,7 @@ state Connecting {
 		// connect header
 		out.putString("MQTT"); // protocol header
 		out.put(5); // protocol version, 5.0
-		out.put(connectFlags(false, false, false, 0, false, true)); // connect flags - NOTE: wills not actually supported
+		out.put(connectFlags(mqttUser != "", mqttPass != "", false, 0, false, true)); // connect flags - NOTE: wills not actually supported
 		out.putShort(sessionTtl); // keep-alive interval seconds
 
 		//
@@ -310,6 +310,9 @@ state Connecting {
 		//
 		// payload
 		out.putString(clientIdent); // client identifier
+
+		if (mqttUser != "") out.putString(mqttUser); // user name
+		if (mqttPass != "") out.putString(mqttPass); // password
 
 		//
 		// send
@@ -401,7 +404,78 @@ state Connecting {
 			}
 		}
 
-		GotoState('Connected');
+		switch (reasonCode) {
+			case 0x00:
+				GotoState('Connected');
+				// returning here, since we'll automatically fall through to the failed state for all other cases
+				return;
+			case 0x80:
+				warn("Unspecified error");
+				break;
+			case 0x81:
+				warn("Malformed Packet");
+				break;
+			case 0x82:
+				warn("Protocol Error");
+				break;
+			case 0x83:
+				warn("Implementation specific error");
+				break;
+			case 0x84:
+				warn("Unsupported Protocol Version");
+				break;
+			case 0x85:
+				warn("Client Identifier not valid");
+				break;
+			case 0x86:
+				warn("Bad User Name or Password");
+				break;
+			case 0x87:
+				warn("Not Authorised");
+				break;
+			case 0x88:
+				warn("Server unavailable");
+				break;
+			case 0x89:
+				warn("Server busy");
+				break;
+			case 0x8A:
+				warn("Banned");
+				break;
+			case 0x8C:
+				warn("Bad authentication method");
+				break;
+			case 0x90:
+				warn("Topic Name invalid");
+				break;
+			case 0x95:
+				warn("Packet too large");
+				break;
+			case 0x97:
+				warn("Quota exceeded");
+				break;
+			case 0x99:
+				warn("Payload format invalid");
+				break;
+			case 0x9A:
+				warn("Retain not supported");
+				break;
+			case 0x9B:
+				warn("QoS not supported");
+				break;
+			case 0x9C:
+				warn("Use another server");
+				break;
+			case 0x9D:
+				warn("Server moved");
+				break;
+			case 0x9F:
+				warn("Connection rate exceeded");
+				break;
+			default:
+				warn("Unknown reason code on connect: " $ reasonCode);
+		}
+		GotoState('Failed');
 	}
 
 	function byte connectFlags(bool hasUserName, bool hasPassword, bool willRetain, byte willQos, bool willFlag, bool cleanStart) {
@@ -691,7 +765,7 @@ state Connected {
 			payload = payload $ Chr(buf.get());
 		}
 
-		log("Received publish payload: " $ payload);
+		log("Received publish on topic "$ topic $ ": " $ payload);
 
 		ForEach ChildActors(class'MQTTSubscriber', sub) {
 			if (sub.topic == topic) sub.receiveMessage(topic, payload);
@@ -787,9 +861,19 @@ state Connected {
 	}
 }
 
+state Failed {
+	function BeginState() {
+		warn("Entering failed state, will not attempt a reconnection");
+		Disable('Tick');
+		Disable('Timer');
+	}
+}
+
 defaultproperties {
 	clientIdent="utserver"
 	mqttHost="192.168.2.128"
 	mqttPort=1883
+	mqttUser="unreal"
+	mqttPass="blue52"
 	sessionTtl=60
 }

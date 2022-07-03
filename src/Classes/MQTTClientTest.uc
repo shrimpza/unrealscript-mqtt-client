@@ -6,10 +6,11 @@ var private MQTTSubscriber sub, sub2;
 function PostBeginPlay() {
 	log("Hello world");
 	mqtt = Spawn(class'MQTTClient', self);
+
 	sub = Spawn(class'MQTTSubscriber', mqtt);
 	sub2 = Spawn(class'MQTTSubscriber', mqtt);
 
-	SetTimer(10, True);
+//	SetTimer(10, True);
 
 	ByteBufferTest();
 }
