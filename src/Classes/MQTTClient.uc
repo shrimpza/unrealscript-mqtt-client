@@ -532,6 +532,13 @@ state Connected {
 
 	function subscribe(String topic, optional MQTTSubscriber subscriber) {
 		local int ident;
+		local byte subOptions;
+
+		if (topic == "") {
+			warn("Cannot subscribe to empty topic name");
+			return;
+		}
+
 		ident = ++packetIdent;
 
 		log("Subscribing to topic " $ topic);
@@ -554,7 +561,11 @@ state Connected {
 		//
 		// subscriptions
 		out.putString(topic); // subscription name
-		out.put((1 << 0)); // subscription options - qos 1 supported
+		subOptions = 0;
+		subOptions = subOptions | (1 << 5); // do not send retained messages
+		//subOptions = subOptions | (1 << 4); // only send retained messages for new subscription
+		subOptions = subOptions | (1 << 0); // qos 1 supported
+		out.put(subOptions);
 
 		//
 		// send
@@ -656,39 +667,44 @@ state Connected {
 	}
 
 	function publish(String topic, String message) {
-			log("Publishing to topic " $ topic);
+		if (topic == "") {
+			warn("Cannot publish to empty topic name");
+			return;
+		}
 
-			out.compact();
+		log("Publishing to topic " $ topic);
 
-			//
-			// packet header
-			out.put((1 << 5) | (1 << 4)); // publish message identifier
-			out.mark(); // remember position, we need to return here to set the length
-			out.put(0); // the length will go here after we construct the body
+		out.compact();
 
-			//
-			// publish header
-			out.putString(topic);
-			// if qos, include packet ident for ack
-			//out.putShort(++packetIdent); // packet identifier - ack should match this
+		//
+		// packet header
+		out.put((1 << 5) | (1 << 4)); // publish message identifier
+		out.mark(); // remember position, we need to return here to set the length
+		out.put(0); // the length will go here after we construct the body
 
-			//
-			// publish properties
-			out.putVarInt(2); // properties length - length FIXME maybe
-			// payload format indicator: set to string
-			out.put(0x01); // property identifier
-			out.put(0x01); // value - string
+		//
+		// publish header
+		out.putString(topic);
+		// if qos, include packet ident for ack
+		//out.putShort(++packetIdent); // packet identifier - ack should match this
 
-			//
-			// publish payload
-			if (out.putString(message, true) < 0) {
-				warn("Message was too large to publish, not sending");
-				return;
-			}
+		//
+		// publish properties
+		out.putVarInt(2); // properties length - length FIXME maybe
+		// payload format indicator: set to string
+		out.put(0x01); // property identifier
+		out.put(0x01); // value - string
 
-			//
-			// send
-			setLengthAndSend(out);
+		//
+		// publish payload
+		if (out.putString(message, true) < 0) {
+			warn("Message was too large to publish, not sending");
+			return;
+		}
+
+		//
+		// send
+		setLengthAndSend(out);
 	}
 
 	event published(ByteBuffer buf, byte header) {
@@ -697,6 +713,7 @@ state Connected {
 		local String topic, payload;
 		local bool isDupe, isRetained;
 		local MQTTSubscriber sub;
+		local int strPos;
 
 		log("Got a message!");
 
@@ -765,10 +782,31 @@ state Connected {
 			payload = payload $ Chr(buf.get());
 		}
 
-		log("Received publish on topic "$ topic $ ": " $ payload);
+		log("Received publish on topic " $ topic $ ": " $ payload);
 
 		ForEach ChildActors(class'MQTTSubscriber', sub) {
-			if (sub.topic == topic) sub.receiveMessage(topic, payload);
+			if (sub.topic == topic || sub.topic == "#") sub.receiveMessage(topic, payload);
+			else {
+				// attempt to match on wildcard subscriptions
+
+				// multi-level wildcard match - anything in the path following the wildcard is to be delivered
+				strPos = InStr(sub.topic, "/#");
+				if (strPos > -1 && InStr(topic, "/") > -1) {
+					if (Left(sub.topic, strPos) == Left(topic, strPos)) {
+						sub.receiveMessage(topic, payload);
+					}
+					continue;
+				}
+
+				// single-level wildcard matches - only match things at the level the wildcard is on
+				strPos = InStr(sub.topic, "+");
+				if (strPos > -1) {
+					// root level matches
+					if (strPos == 0 && InStr(topic, "/") == -1) {
+						sub.receiveMessage(topic, payload);
+					}
+				}
+			}
 		}
 
 		if (qos == 1) sendPublishAck(ident, 0);

@@ -26,5 +26,5 @@ event receiveMessage(String topic, String message) {
 }
 
 defaultproperties {
-	topic="utserver"
+	topic="utserver/#"
 }

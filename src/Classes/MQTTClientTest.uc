@@ -8,7 +8,7 @@ function PostBeginPlay() {
 	mqtt = Spawn(class'MQTTClient', self);
 
 	sub = Spawn(class'MQTTSubscriber', mqtt);
-	sub2 = Spawn(class'MQTTSubscriber', mqtt);
+//	sub2 = Spawn(class'MQTTSubscriber', mqtt);
 
 //	SetTimer(10, True);
 
@@ -106,6 +106,22 @@ function ByteBufferTest() {
 	buf.flip();
 	assert(buf.getShort() == 223);
 	assert(buf.getInt() == 9001);
+
+	buf.clear();
+	buf.put(0x2e);
+	buf.put(0);
+	buf.put(0x20);
+	buf.flip();
+	log("" $ buf.getVarInt());
+	assert(buf.getShort() == 32);
+
+	buf.clear();
+	do {
+		for (i = 0; i < 255; i++) b[i] = i;
+		buf.putBytes(b, 0, Min(buf.remaining(), 255));
+	} until (!buf.hasRemaining())
+	buf.flip();
+	assert(buf.remaining() == 1024);
 }
 
 defaultproperties {
