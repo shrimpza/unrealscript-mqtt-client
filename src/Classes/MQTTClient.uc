@@ -1,10 +1,11 @@
-class MQTTClient extends TCPLink;
+class MQTTClient extends TCPLink
+	config;
 
 // connection properties
-var String mqttHost;
-var int mqttPort;
-var int sessionTtl;
-var String clientIdent;
+var config String mqttHost;
+var config int mqttPort;
+var config int sessionTtl;
+var config String clientIdent;
 
 // state
 var private transient int packetIdent;
@@ -13,6 +14,8 @@ var private float pingTime; // RTT for ping requests
 
 var private transient ByteBuffer out;
 var private transient ByteBuffer in;
+
+var private array<MQTTSubscriber> newSubscribers;
 
 static final operator(18) int % (int A, int B) {
 	return A - (A / B) * B;
@@ -30,16 +33,41 @@ function PreBeginPlay() {
 }
 
 function bool IsConnectionEstablished() {
-	return isInState('Connected');
+	return IsConnected() && isInState('Connected');
 }
 
+/**
+ * Called when an actor is spawned with this as the owner.
+ *
+ * In the case of an MQTTSubscriber, we create a topic subscription
+ * to begin receiving messages on its behalf.
+ */
 event GainedChild(Actor other) {
 	// if is a MQTTSubscriber, it's a new subscription
+	local MQTTSubscriber subscriber;
+
+	Super.GainedChild(other);
+
+	subscriber = MQTTSubscriber(other);
+	if (subscriber == None) return;
+
+	// at this point, the child/subscriber has not been fully initialised, so we enqueue
+	// its actual subscription for the next tick.
+	newSubscribers.Insert(newSubscribers.Length, 1);
+	newSubscribers[newSubscribers.Length- 1 ] = subscriber;
 }
 
+/**
+ * Called when a child actor is destroyed or detached from this one.
+ *
+ * In the case of an MQTTSubscriber, if it was the only remaining
+ * subscriber on a specific topic, also unsubscribe from that topic.
+ */
 event LostChild(Actor other) {
 	// if is a MQTTSubscriber, unsubscribe
 	local MQTTSubscriber subscriber, it;
+
+	Super.LostChild(other);
 
 	subscriber = MQTTSubscriber(other);
 	if (subscriber == None) return;
@@ -49,24 +77,30 @@ event LostChild(Actor other) {
 		if (it != subscriber && it.topic == subscriber.topic) return;
 	}
 
-	if (isConnectionEstablished()) unsubscribe(subscriber.topic);
-}
-
-// FIXME can this move to GainedChild - enqueue something to be executed following tick
-event newSubscriber(MQTTSubscriber subscriber) {
-	if (isConnectionEstablished()) subscribe(subscriber.topic);
+	if (IsConnectionEstablished()) unsubscribe(subscriber.topic);
 }
 
 event Closed() {
 	log("Connection closed!");
 
+	Super.Closed();
+
 	GotoState('NotConnected');
 }
 
+/**
+ * On each tick, check if there is outstanding data waiting to be read, and if
+ * there is, fill our incoming buffer with as much as is available.
+ *
+ * Once reading is complete, attempt to identify the packet type, and hand off
+ * to appropriate function for processing.
+ */
 event Tick(float DeltaTime) {
 	local byte buf[255];
 	local byte next;
-	local int read;
+	local int read, i;
+
+	if (!IsConnected()) return;
 
 	if (IsDataPending()) {
 		in.compact();
@@ -91,7 +125,17 @@ event Tick(float DeltaTime) {
 			connectAck(in);
 		} else if (((1 << 6) & next) > 0) { // PUBACK message
 			publishAck(in);
+		} else {
+			warn("Unknown packet identifier value received: " $ next);
 		}
+	}
+
+	// set up new subscriptions, if any
+	if (newSubscribers.Length > 0) {
+		for (i = 0; i < newSubscribers.Length; i++) {
+			if (IsConnectionEstablished()) subscribe(newSubscribers[i].topic);
+		}
+		newSubscribers.Remove(0, newSubscribers.Length);
 	}
 }
 
@@ -143,22 +187,30 @@ event pingAck(ByteBuffer buf) {
 	warn("Received ping ack when not connected!");
 }
 
+/**
+ * A helper function which will populate an MQTT packet length indicator prior
+ * to sending, and then send the packet.
+ */
 function setLengthAndSend(ByteBuffer send) {
-		local int was;
+	local int was;
 
-		// NOTE assumes mark is at the position we want to set the length at
+	// NOTE assumes mark is at the position we want to set the length at
 
-		//
-		// set length and send
-		was = out.getPosition();
-		out.reset(); // return to mark
-		out.putVarInt(was - out.getPosition() - 1);
-		out.setPosition(was);
-		out.flip();
+	//
+	// set length and send
+	was = out.getPosition();
+	out.reset(); // return to mark
+	out.putVarInt(was - out.getPosition() - 1);
+	out.setPosition(was);
+	out.flip();
 
-		sendBuffer(out);
+	sendBuffer(out);
 }
 
+/**
+ * A helper function which writes the provided buffer in 255 byte chunks as
+ * required by the SendBinary implementation.
+ */
 function sendBuffer(ByteBuffer send) {
 	local byte b[255];
 	local int len;
@@ -169,6 +221,13 @@ function sendBuffer(ByteBuffer send) {
 	}
 }
 
+/**
+ * Upon entering the NotConnected state, the MQTT host is resolved, and a
+ * connection attempt is started.
+ *
+ * Successfully resolving the host and opening the socket connection will
+ * advance to the Connecting state.
+ */
 auto state NotConnected {
 
 	function BeginState() {
@@ -214,6 +273,11 @@ auto state NotConnected {
 	}
 }
 
+/**
+ * Entering the Connecting state, a connection message will be sent to the
+ * MQTT host, and on successful receipt of a connection ACK, will advance to
+ * the Connected state.
+ */
 state Connecting {
 
 	function BeginState() {
@@ -240,7 +304,7 @@ state Connecting {
 		// properties - FIXME could be an additional buffer, but just pre-calculating the size now since this is simplistic
 		out.putVarInt(5);
 		// max packet size property
-		out.put(39);
+		out.put(0x27);
 		out.putInt(in.CAPACITY); // max packet to buffer capacity
 
 		//
@@ -358,6 +422,17 @@ state Connecting {
 
 }
 
+/**
+ * While in the Connected state, topic subscriptions may be created, messages
+ * may be published, and incoming messages will be received and delegated to
+ * appropriate subscribers.
+ *
+ * While connected, periodic ping requests will be sent, to keep the connection
+ * alive, per the server's keep alive interval (and the configured sessionTtl).
+ *
+ * If the connection drops or is closed, we will return to the NotConnected
+ * state in an attempt to re-establish the connection.
+ */
 state Connected {
 
 	function BeginState() {
@@ -370,6 +445,8 @@ state Connected {
 		// this is not a repeating timer - we schedule the timer again once we receive an ack
 		SetTimer(keepAlive / 2, False);
 
+		// if there were subscribers waiting to subscribe (they were created before the
+		// connection was up), subscribe to topics now.
 		ForEach ChildActors(class'MQTTSubscriber', sub) {
 			subscribe(sub.topic);
 		}

@@ -2,22 +2,20 @@
 // The MQTTSubscriber acts as an interface between the MQTTClient and custom
 // subscription message handlers.
 //
-// Custom implementations may inherit from this class, and override the
+// The MQTTSubscriber is intended to be spawned with the MQTTClient as its
+// owner, which allows the MQTTClient to then handle topic subscriptions and
+// message delivery to MQTTSubscriber instances automatically.
+//
+// Custom implementations should inherit from this class, and may override the
 // following events:
 //
-// - subscribed(String topic)
+// - subscribed()
 // - receiveMessage(String topic, String message)
 //=============================================================================
 class MQTTSubscriber extends Info;
 
 var String topic;
 var int subscriptionIdent;
-
-function PostBeginPlay() {
-	local MQTTClient mqtt;
-	mqtt = MQTTClient(Owner);
-	if (mqtt != None) mqtt.newSubscriber(Self);
-}
 
 event subscribed() {
 	log("Subscriber " $ Self $ " subscribed to topic " $ topic);

@@ -132,7 +132,7 @@ function int putBuffer(ByteBuffer src) {
  * requested. If count is greater than the remaining buffer size,
  * as much as remains in the buffer will be copied.
  *
- * Returns the number of bytes copied.
+ * Returns the number of bytes copied, or -1 if error.
  */
 function int getBytes(out byte data[255], int count) {
   local int was, i;
@@ -155,6 +155,8 @@ function int getBytes(out byte data[255], int count) {
  * the number of bytes written.
  *
  * The from and to parameters allow writing a subset of the data.
+ *
+ * Returns the number of bytes written, or -1 if error.
  */
 function int putBytes(byte data[255], int from, int count) {
 	local int was, i;
@@ -180,12 +182,12 @@ function int putBytes(byte data[255], int from, int count) {
  * Read a single byte from the current position, and advance by 1.
  */
 function byte get() {
-	if (!canRead(1)) return -1;
+	if (!canRead(1)) return 0;
 	return buf[position++];
 }
 
 /**
- * Write a single byte from the current position, and advance by 1.
+ * Write a single byte at the current position, and advance by 1.
  */
 function int put(byte val) {
 	local int was;
@@ -197,11 +199,19 @@ function int put(byte val) {
 	return position - was;
 }
 
+/**
+ * Read a two byte short value from the current position, and advance by 2.
+ */
 function int getShort() {
 	if (!canRead(2)) return -1;
 	return buf[position++] << 8 | buf[position++];
 }
 
+/**
+ * Write a two byte short value at the current position, and advance by 2.
+ *
+ * Returns the number of bytes written, or -1 if error.
+ */
 function int putShort(int val) {
 	local int was;
 	if (!canWrite(2)) return -1;
@@ -213,11 +223,19 @@ function int putShort(int val) {
 	return position - was;
 }
 
+/**
+ * Read a four byte short value from the current position, and advance by 4.
+ */
 function int getInt() {
 	if (!canRead(4)) return -1;
 	return (buf[position++] << 24) | (buf[position++] << 16) | (buf[position++] << 8) | (buf[position++]);
 }
 
+/**
+ * Write a four byte integer value at the current position, and advance by 4.
+ *
+ * Returns the number of bytes written, or -1 if error.
+ */
 function int putInt(int val) {
 	local int was;
 	if (!canWrite(4)) return -1;
@@ -231,7 +249,12 @@ function int putInt(int val) {
 	return position - was;
 }
 
-// FIXME doc to note short prefix
+/**
+ * Read a length-prefixed string from the current position, and advance by the
+ * length of the string and the length prefix.
+ *
+ * The prefix is expected to be a two byte short value.
+ */
 function String getString() {
 	local int len, i;
 	local String str;
@@ -252,7 +275,12 @@ function String getString() {
 	return str;
 }
 
-// FIXME doc to note short prefix
+/**
+ * Write an optionally length-prefixed string at the current position, and
+ * advance by the length of the string and the length prefix.
+ *
+ * If noLengthPrefix, no prefix will be written.
+ */
 function int putString(String str, optional bool noLengthPrefix) {
 	local int i, was, strLen;
 
@@ -271,6 +299,10 @@ function int putString(String str, optional bool noLengthPrefix) {
 	return position - was;
 }
 
+/**
+ * Read an MQTT Variable Length Integer value from the current position, advancing by
+ * the number of bytes read.
+ */
 function int getVarInt() {
 	local int multiplier, value;
 	local byte encodedByte;
@@ -293,6 +325,10 @@ function int getVarInt() {
 	return value;
 }
 
+/**
+ * Write an MQTT Variable Length Integer value at the current position, advancing by
+ * the number of bytes written.
+ */
 function int putVarInt(int value) {
 	local byte encodedByte, rem;
 	local int was;
