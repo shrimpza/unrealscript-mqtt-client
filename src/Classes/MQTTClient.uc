@@ -1,26 +1,40 @@
 class MQTTClient extends TCPLink
 	config;
 
-// connection properties
-var config String mqttHost;
-var config int mqttPort;
-var config int sessionTtl;
-var config String mqttUser;
-var config String mqttPass;
-var config String clientIdent;
+/*
+ * connection properties
+ */
+var config String mqttHost;			// The MQTT host to connect to
+var config int mqttPort;				// The MQTT port to connect to
+var config int sessionTtl;			// Session TTL, after no activity for this long the connection will close. Pings are used to keep alive.
+var config String mqttUser;			// MQTT user to authenticate with, if required
+var config String mqttPass;			// MQTT password to authenticate with, if required
+var config String clientIdent;	// unique client identifier
 
-// state
+/*
+ * misc properties
+ */
+var config bool debugLog;
+
+
+// private state management
 var private transient int packetIdent;
 var private int keepAlive; // interval between pings, set to sessionTtl, or overridden by server
 var private float pingTime; // RTT for ping requests
 
+// i/o buffers
 var private transient ByteBuffer out;
 var private transient ByteBuffer in;
 
+// pending subscriber management
 var private array<MQTTSubscriber> newSubscribers;
 
 static final operator(18) int % (int A, int B) {
 	return A - (A / B) * B;
+}
+
+function debug(coerce String msg) {
+	if (debugLog) log("[MQTT Debug] " $ msg);
 }
 
 function PreBeginPlay() {
@@ -83,7 +97,7 @@ event LostChild(Actor other) {
 }
 
 event Closed() {
-	log("Connection closed!");
+	log("[MQTT] Connection closed!");
 
 	Super.Closed();
 
@@ -113,8 +127,9 @@ event Tick(float DeltaTime) {
 		in.flip();
 	}
 
-	if (in.hasRemaining()) {
+	while (in.hasRemaining()) {
 		next = in.get();
+		if (next == -1) return;
 		if (((1 << 7) & next) > 0 && ((1 << 5) & next) > 0 && ((1 << 4) & next) > 0) { // UNSUBACK message
 			unsubscribeAck(in);
 		} else if (((1 << 4) & next) > 0 && ((1 << 6) & next) > 0 && ((1 << 7) & next) > 0) { // PINGRESP message
@@ -231,12 +246,14 @@ function sendBuffer(ByteBuffer send) {
 auto state NotConnected {
 
 	function BeginState() {
-		log("MQTT client is not connected");
+		debug("Client is not connected");
 
 		connect();
 	}
 
 	function connect() {
+		log("[MQTT] Client connecting to " $ mqttHost $ ":" $ mqttPort);
+
 		packetIdent = 0; // reset our packet identifier
 
 		// initiate connection process by resolving the host
@@ -244,7 +261,6 @@ auto state NotConnected {
 	}
 
 	event Resolved(IpAddr Addr) {
-		log("Resolved host " $ mqttHost $ " = " $ Addr.Addr);
 		Addr.port = mqttPort;
 
 		if (BindPort() == 0) {
@@ -253,7 +269,7 @@ auto state NotConnected {
 		}
 
 		if (Open(Addr)) {
-			log("Connected!");
+			debug("Connected!");
 		} else {
 			warn("Connection failed!");
 		}
@@ -264,7 +280,7 @@ auto state NotConnected {
 	}
 
 	event Opened() {
-		log("Connection opened!");
+		debug("Connection opened!");
 
 		in.clear();
 		out.clear();
@@ -281,7 +297,7 @@ auto state NotConnected {
 state Connecting {
 
 	function BeginState() {
-		log("In Connecting state");
+		debug("In Connecting state");
 
 		keepAlive = sessionTtl;
 
@@ -334,72 +350,72 @@ state Connecting {
 			switch (prop) {
 				case 0x11: // Session Expiry Interval
 					// 4 byte int
-					log("Session Expiry Interval: " $ buf.getInt());
+					debug("Session Expiry Interval: " $ buf.getInt());
 					break;
 				case 0x21: // Receive Maximum
 					// 2 byte short
-					log("Receive Maximum: " $ buf.getShort());
+					debug("Receive Maximum: " $ buf.getShort());
 					break;
 				case 0x24: // Maximum QoS
 					// 1 byte
-					log("Maximum QoS: " $ buf.get());
+					debug("Maximum QoS: " $ buf.get());
 					break;
 				case 0x25: // Retain Available
 					// 1 byte
-					log("Retain Available: " $ buf.get());
+					debug("Retain Available: " $ buf.get());
 					break;
 				case 0x27: // Maximum Packet Size
 					// 2 byte short
-					log("Maximum Packet Size: " $ buf.getShort());
+					debug("Maximum Packet Size: " $ buf.getShort());
 					break;
 				case 0x18: // Assigned Client Identifier
 					// variable length string
 					clientIdent = buf.getString();
-					log("Assigned Client Identifier: " $ clientIdent);
+					debug("Assigned Client Identifier: " $ clientIdent);
 					break;
 				case 0x22: // Topic Alias Maximum
 					// 2 byte short
-					log("Topic Alias Maximum: " $ buf.getShort());
+					debug("Topic Alias Maximum: " $ buf.getShort());
 					break;
 				case 0x1f: // Reason String
-					log("Reason String: " $ buf.getString());
+					debug("Reason String: " $ buf.getString());
 					break;
 				case 0x26: // User Property, repeats
-					log("User Property name : " $ buf.getString());
-					log("User Property value: " $ buf.getString());
+					debug("User Property name : " $ buf.getString());
+					debug("User Property value: " $ buf.getString());
 					break;
 				case 0x28: // Wildcard Subscription Available
 					// 1 byte
-					log("Wildcard Subscription Available: " $ buf.get());
+					debug("Wildcard Subscription Available: " $ buf.get());
 					break;
 				case 0x29: // Subscription Identifiers Available
 					// 1 byte
-					log("Subscription Identifiers Available: " $ buf.get());
+					debug("Subscription Identifiers Available: " $ buf.get());
 					break;
 				case 0x2a: // Shared Subscription Available
 					// 1 byte
-					log("Shared Subscription Available: " $ buf.get());
+					debug("Shared Subscription Available: " $ buf.get());
 					break;
 				case 0x13: // Server Keep Alive
 					// 2 byte short
 					keepAlive = buf.getShort();
-					log("Server Keep Alive: " $ keepAlive);
+					debug("Server Keep Alive: " $ keepAlive);
 					break;
 				case 0x1a: // Response Information
-					log("Response Information: " $ buf.getString());
+					debug("Response Information: " $ buf.getString());
 					break;
 				case 0x1a: // Server Reference
-					log("Server Reference: " $ buf.getString());
+					debug("Server Reference: " $ buf.getString());
 					break;
 				case 0x15: // Authentication Method
-					log("Authentication Method: " $ buf.getString());
+					debug("Authentication Method: " $ buf.getString());
 					break;
 				case 0x16: // Authentication Data
 					// ... byte binary data... everything until end of properties?
 					buf.setPosition(propsLen);
 					break;
 				default:
-					warn("received unknown property identifier: " $ prop);
+					warn("[mqtt] Received unknown property identifier: " $ prop);
 					return;
 			}
 		}
@@ -512,7 +528,7 @@ state Connected {
 	function BeginState() {
 		local MQTTSubscriber sub;
 
-		log("In Connected state");
+		log("[MQTT] Client has connected");
 
 		// set the keep-alive/ping timer.
 		// we ping twice as frequently as the session TTL to allow some time margin.
@@ -532,7 +548,6 @@ state Connected {
 
 	function subscribe(String topic, optional MQTTSubscriber subscriber) {
 		local int ident;
-		local byte subOptions;
 
 		if (topic == "") {
 			warn("Cannot subscribe to empty topic name");
@@ -541,7 +556,7 @@ state Connected {
 
 		ident = ++packetIdent;
 
-		log("Subscribing to topic " $ topic);
+		log("[MQTT] Subscribing to topic " $ topic);
 
 		if (subscriber != None) subscriber.subscriptionIdent = ident;
 
@@ -555,21 +570,37 @@ state Connected {
 
 		//
 		// subscription header
-		out.putShort(ident); // packet identifier, can use to correlate back to
+		out.putShort(ident); // packet identifier, can use to correlate back to subscriber for Ack
 		out.put(0); // properties length - 0, none
 
 		//
 		// subscriptions
 		out.putString(topic); // subscription name
-		subOptions = 0;
-		subOptions = subOptions | (1 << 5); // do not send retained messages
-		//subOptions = subOptions | (1 << 4); // only send retained messages for new subscription
-		subOptions = subOptions | (1 << 0); // qos 1 supported
-		out.put(subOptions);
+		if (subscriber != None) {
+			out.put(subscribeFlags(1, subscriber.noLocal, false, subscriber.sendRetained, true));
+		} else {
+			// default options
+			out.put(subscribeFlags(1, false, false, false, false));
+		}
 
 		//
 		// send
 		setLengthAndSend(out);
+	}
+
+	function byte subscribeFlags(byte qosLevel, bool noLocal, bool retainAsPublished, bool sendRetained, bool sendRetainedNewSubsOnly) {
+		local byte b;
+
+		b = 0;
+		// bits 6 and 7 are reserved
+		if (!sendRetained) 			b = b | (1 << 5);
+		if (sendRetained && sendRetainedNewSubsOnly) b = b | (1 << 4);
+		if (retainAsPublished) 	b = b | (1 << 3);
+		if (noLocal) 						b = b | (1 << 2);
+		if (qosLevel == 2)			b = b | (1 << 1);
+		if (qosLevel == 1)			b = b | (1 << 0);
+
+		return b;
 	}
 
 	event subscribeAck(ByteBuffer buf) {
@@ -577,7 +608,7 @@ state Connected {
 		local int len, propsLen, ident;
 		local MQTTSubscriber sub;
 
-		log("Subscribed!");
+		debug("Subscribed!");
 
 		len = buf.getVarInt();
 		len += buf.getPosition();
@@ -588,8 +619,8 @@ state Connected {
 			prop = buf.get();
 			switch (prop) {
 				case 0x26: // User Property, repeats
-					log("User Property name : " $ buf.getString());
-					log("User Property value: " $ buf.getString());
+					debug("User Property name : " $ buf.getString());
+					debug("User Property value: " $ buf.getString());
 					break;
 				default:
 					warn("received unknown property identifier: " $ prop);
@@ -599,7 +630,7 @@ state Connected {
 
 		while (buf.getPosition() < len) {
 			reasonCode = buf.get();
-			log("reason code: " $ reasonCode);
+			debug("reason code: " $ reasonCode);
 		}
 
 		ForEach ChildActors(class'MQTTSubscriber', sub) {
@@ -608,7 +639,7 @@ state Connected {
 	}
 
 	function unsubscribe(String topic) {
-		log("Unsubscribe from topic " $ topic);
+		log("[MQTT] Unsubscribe from topic " $ topic);
 
 		out.compact();
 
@@ -636,7 +667,7 @@ state Connected {
 		local byte reasonCode, prop;
 		local int len, propsLen, ident;
 
-		log("Unsubscribed!");
+		debug("Unsubscribed");
 
 		len = buf.getVarInt();
 		len += buf.getPosition();
@@ -648,11 +679,11 @@ state Connected {
 			prop = buf.get();
 			switch (prop) {
 				case 0x1f: // Reason String
-					log("Reason String: " $ buf.getString());
+					debug("Reason String: " $ buf.getString());
 					break;
 				case 0x26: // User Property, repeats
-					log("User Property name: " $ buf.getString());
-					log("User Property value: " $ buf.getString());
+					debug("User Property name: " $ buf.getString());
+					debug("User Property value: " $ buf.getString());
 					break;
 				default:
 					warn("received unknown property identifier: " $ prop);
@@ -662,7 +693,7 @@ state Connected {
 
 		while (buf.getPosition() < len) {
 			reasonCode = buf.get();
-			log("reason code: " $ reasonCode);
+			debug("reason code: " $ reasonCode);
 		}
 	}
 
@@ -715,7 +746,7 @@ state Connected {
 		local MQTTSubscriber sub;
 		local int strPos;
 
-		log("Got a message!");
+		debug("Got a message!");
 
 		isDupe = ((1 << 3) & header) > 0;
 		isRetained = ((1 << 0) & header) > 0;
@@ -742,33 +773,33 @@ state Connected {
 			switch (prop) {
 				case 0x01: // Payload Format Indicator
 					// 1 byte
-					log("Payload Format Indicator: " $ buf.get());
+					debug("Payload Format Indicator: " $ buf.get());
 					break;
 				case 0x02: // Message Expiry Interval
 					// 4 byte int
-					log("Message Expiry Interval: " $ buf.getInt());
+					debug("Message Expiry Interval: " $ buf.getInt());
 					break;
 				case 0x23: // Topic Alias
 					// 2 byte short
-					log("Topic Alias: " $ buf.getShort());
+					debug("Topic Alias: " $ buf.getShort());
 					break;
 				case 0x08: // Response Topic
-					log("Response Topic: " $ buf.getString());
+					debug("Response Topic: " $ buf.getString());
 					break;
 				case 0x09: // Correlation Data
 					// ... byte binary data... how long?
-					log("Correlation Data: " $ buf.getString());
+					debug("Correlation Data: " $ buf.getString());
 					break;
 				case 0x26: // User Property, repeats
-					log("User Property name: " $ buf.getString());
-					log("User Property value: " $ buf.getString());
+					debug("User Property name: " $ buf.getString());
+					debug("User Property value: " $ buf.getString());
 					break;
 				case 0x0B: // Subscription Identifier
 					// variable int
-					log("Subscription Identifier: " $ buf.getVarInt());
+					debug("Subscription Identifier: " $ buf.getVarInt());
 					break;
 				case 0x03: // Content Type
-					log("Content Type: " $ buf.getString());
+					debug("Content Type: " $ buf.getString());
 					break;
 				default:
 					warn("received unknown property identifier: " $ prop);
@@ -782,7 +813,7 @@ state Connected {
 			payload = payload $ Chr(buf.get());
 		}
 
-		log("Received publish on topic " $ topic $ ": " $ payload);
+		debug("Received publish on topic " $ topic $ ": " $ payload);
 
 		ForEach ChildActors(class'MQTTSubscriber', sub) {
 			if (sub.topic == topic || sub.topic == "#") sub.receiveMessage(topic, payload);
@@ -813,7 +844,7 @@ state Connected {
 	}
 
 	function sendPublishAck(int ident, byte reasonCode) {
-		log("Sending publish ack for packet " $ ident);
+		debug("Sending publish ack for packet " $ ident);
 
 		out.compact();
 
@@ -870,7 +901,7 @@ state Connected {
 	}
 
 	function ping() {
-		log("Send ping");
+		debug("Send ping");
 
 		pingTime = Level.TimeSeconds;
 
@@ -887,7 +918,7 @@ state Connected {
 	}
 
 	function pingAck(ByteBuffer buf) {
-		log("Received ping response in " $ (Level.TimeSeconds - pingTime) $ "s");
+		debug("Received ping response in " $ (Level.TimeSeconds - pingTime) $ "s");
 
 		// null byte
 		if (buf.get() != 0) {
@@ -914,4 +945,5 @@ defaultproperties {
 	mqttUser="unreal"
 	mqttPass="blue52"
 	sessionTtl=60
+	debugLog=true
 }

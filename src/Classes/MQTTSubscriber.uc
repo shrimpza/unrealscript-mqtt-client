@@ -14,7 +14,23 @@
 //=============================================================================
 class MQTTSubscriber extends Info;
 
+/**
+ * Topic filter to subscribe to.
+ */
 var String topic;
+
+/**
+ * If true, request server to send retained messages matching the topic filter
+ * when subscribing.
+ */
+var bool sendRetained;
+
+/**
+ * If true, this subscription will not receive published by this client.
+ */
+var bool noLocal;
+
+// internal state management
 var int subscriptionIdent;
 
 event subscribed() {
@@ -27,4 +43,6 @@ event receiveMessage(String topic, String message) {
 
 defaultproperties {
 	topic="utserver/#"
+	noLocal=true
+	sendRetained=false
 }
