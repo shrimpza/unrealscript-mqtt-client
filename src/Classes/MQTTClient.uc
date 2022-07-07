@@ -706,7 +706,7 @@ state Connected {
 			return;
 		}
 
-		debug("Publishing to topic " $ topic);
+		debug("Publishing to topic " $ topic $ ": " $ message);
 
 		out.compact();
 

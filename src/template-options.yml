@@ -2,4 +2,8 @@ mutators:
   - class: MQTTClientTest
     en:
       name: MQTT Client Test
-      description: Connects to an MQTT server
+      description: Connects to an MQTT server and does some assertions
+  - class: MQTTClientDemo
+    en:
+      name: MQTT Client Demo
+      description: Example which shows how a real-time stats or game event system might be implemented
