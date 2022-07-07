@@ -540,6 +540,9 @@ state Connected {
 		ForEach ChildActors(class'MQTTSubscriber', sub) {
 			subscribe(sub.topic);
 		}
+
+		// notify owner by way of trigger, so it knows we're connected
+		if (Owner != None) Owner.Trigger(Self, None);
 	}
 
 	event Timer() {
@@ -703,7 +706,7 @@ state Connected {
 			return;
 		}
 
-		log("Publishing to topic " $ topic);
+		debug("Publishing to topic " $ topic);
 
 		out.compact();
 
