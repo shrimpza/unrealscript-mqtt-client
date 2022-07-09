@@ -5,6 +5,10 @@ const CAPACITY = 1024;
 var private byte buf[CAPACITY];
 var private int limit, position, marker;
 
+static final operator(18) int % (int A, int B) {
+	return A - (A / B) * B;
+}
+
 /**
  * Resets the current position to the beginning, and sets the limit
  * to the capacity. The marker is also reset.

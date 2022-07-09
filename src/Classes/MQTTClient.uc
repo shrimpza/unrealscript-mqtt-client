@@ -29,10 +29,6 @@ var private transient ByteBuffer in;
 // pending subscriber management
 var private array<MQTTSubscriber> newSubscribers;
 
-static final operator(18) int % (int A, int B) {
-	return A - (A / B) * B;
-}
-
 function debug(coerce String msg) {
 	if (debugLog) log("[MQTT Debug] " $ msg);
 }
