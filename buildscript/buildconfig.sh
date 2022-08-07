@@ -7,8 +7,8 @@ SCRIPTS_DIR=$(dirname $(realpath $0))
 
 export name="mqtt-client"
 export package=MQTTClient
-export build=1
-export version=1
+export build=101
+export version=101
 export packagefull=$package
 export packagedist=$package$version
 export debug=1

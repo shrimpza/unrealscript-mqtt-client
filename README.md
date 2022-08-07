@@ -1,6 +1,7 @@
 # UnrealScript MQTT Client
 
-A simple MQTT client implemented in UnrealScript for Unreal Tournament.
+A simple MQTT client implemented in UnrealScript for Unreal Tournament 
+(possibly works with other Unreal Engine 1 games as well).
 
 The following MQTT protocol features are supported:
 
